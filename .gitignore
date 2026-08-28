@@ -1,0 +1,5 @@
+# Kaynak paperlar buyuk ve yeniden indirilebilir, repo sismesin
+Kaynaklar/*.pdf
+
+# OS / editor noise
+.DS_Store
