@@ -1,0 +1,26 @@
+{
+  "selection_rule": "Maximum validation accuracy across baseline and three documented trials; no test-based selection",
+  "selected_run": "resize_cosine",
+  "checkpoint": "outputs/resize_cosine_60epochs/insects/best.pt",
+  "checkpoint_sha256": "9983f9d32e755f2821337a8e0c6c144a71069fd36e2da8b5235840251af1947e",
+  "validation_accuracy": 0.5541149943630215,
+  "validation_macro_recall": 0.40327522225711876,
+  "candidates": [
+    {
+      "name": "baseline",
+      "validation_accuracy": 0.5090191657271702
+    },
+    {
+      "name": "resize",
+      "validation_accuracy": 0.5174746335963923
+    },
+    {
+      "name": "resize_lr3e4",
+      "validation_accuracy": 0.44306651634723787
+    },
+    {
+      "name": "resize_cosine",
+      "validation_accuracy": 0.5541149943630215
+    }
+  ]
+}

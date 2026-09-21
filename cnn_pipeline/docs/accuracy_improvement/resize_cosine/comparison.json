@@ -1,0 +1,24 @@
+{
+  "checkpoint": "outputs/resize_cosine_60epochs/insects/best.pt",
+  "checkpoint_sha256": "9983f9d32e755f2821337a8e0c6c144a71069fd36e2da8b5235840251af1947e",
+  "best_epoch": 51,
+  "baseline_val_accuracy": 0.5090191657271702,
+  "val_accuracy": 0.5541149943630215,
+  "accuracy_delta_pp": 4.509582863585127,
+  "baseline_val_macro_recall": 0.3471535761732434,
+  "val_macro_recall": 0.40327522225711876,
+  "test_evaluated": true,
+  "split_manifest_sha256": "fd7fbe0b975f2c792cce5795836fd2708f66b1ff822759616e512dda4ffece7a",
+  "source_sha256": {
+    "train.py": "b46d221e9145afa3b783def0483044d2e2722430a46891069b0a2483fd001f59",
+    "data.py": "206e75343c2030faa454bd797c27cd8f85c20f827e7f331d082eeb6693204994",
+    "model.py": "7a097e1f02fb562f6b5a073ea683724819a3467a254ea4e1624511feb2cef0cc",
+    "analyze_validation.py": "71c21c69ec4ee5dac2f59624fbcfa741fac699cd885fb53dd54772814a9bb4d9"
+  },
+  "versions": {
+    "python": "3.11.15",
+    "torch": "2.11.0+cu128",
+    "torchvision": "0.26.0+cu128"
+  },
+  "test_metrics": "../selected_test_metrics.json"
+}

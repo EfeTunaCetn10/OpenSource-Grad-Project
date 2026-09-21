@@ -7,12 +7,13 @@ with INT8 inference and an integer golden reference planned for hardware verific
 ## Current progress
 
 - **Data preparation:** a 10-label Insect Detect subset, split by capture day.
-- **FP32 training:** 50.31% test accuracy and 34.79% macro recall.
+- **FP32 training:** latest selected model reaches 51.54% test accuracy and
+  36.45% macro recall (initial baseline: 50.31% / 34.79%).
 - **INT8 quantization and golden reference:** planned; not yet implemented.
 
 The FP32 results are an initial baseline. Performance varies substantially
 across classes, including two classes with zero test recall. See the
-[evaluation report](cnn_pipeline/docs/fp32_baseline/README.md) for details.
+[latest evaluation report](cnn_pipeline/docs/accuracy_improvement/README.md) for details.
 
 ## Repository structure
 

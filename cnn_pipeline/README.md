@@ -6,6 +6,10 @@ insect dataset preparation, RGB normalization, and FP32 training.
 
 ## Model and baseline
 
+The [latest accuracy improvement](docs/accuracy_improvement/README.md) reaches
+55.41% validation accuracy and 51.54% test accuracy with the same architecture.
+The initial baseline below is retained as the comparison reference.
+
 ```text
 RGB 3×32×32
 → Conv(3→6, 5×5) → ReLU → MaxPool(2×2)
@@ -147,3 +151,9 @@ validation accuracy/recall trade-off from inverse-frequency training weights.
 
 The [square-root weighting experiment](docs/sqrt_weighted_experiment/README.md)
 compares all three approaches on the same validation split.
+
+For full-image augmentation, use `--train-resize` to replace random crops with
+32×32 resizing while retaining horizontal flips and color jitter.
+`--scheduler cosine` gradually lowers the learning rate over `--epochs`; the
+default remains validation-driven `plateau`. Run configuration and source
+hashes are stored with each new checkpoint.

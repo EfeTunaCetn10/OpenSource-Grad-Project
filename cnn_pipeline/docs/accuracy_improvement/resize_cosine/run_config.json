@@ -1,0 +1,40 @@
+{
+  "dataset": "insects",
+  "data_dir": "data/insects",
+  "stats": "data/insects/stats.json",
+  "output_dir": "outputs/resize_cosine_60epochs",
+  "epochs": 60,
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "weight_decay": 0.0001,
+  "workers": 0,
+  "seed": 42,
+  "limit_train": null,
+  "limit_eval": null,
+  "skip_test": true,
+  "class_weighted": false,
+  "class_weight_power": 1.0,
+  "train_resize": true,
+  "scheduler": "cosine",
+  "device": "cpu",
+  "class_names": [
+    "bee",
+    "beetle",
+    "beetle_cocci",
+    "bug",
+    "fly",
+    "fly_sarco",
+    "fly_small",
+    "hfly_episyr",
+    "hfly_eupeo",
+    "hfly_sphaero"
+  ],
+  "class_weights": null,
+  "train_class_counts": null,
+  "validation_loss": "unweighted cross entropy",
+  "source_sha256": {
+    "train.py": "b46d221e9145afa3b783def0483044d2e2722430a46891069b0a2483fd001f59",
+    "data.py": "206e75343c2030faa454bd797c27cd8f85c20f827e7f331d082eeb6693204994",
+    "model.py": "7a097e1f02fb562f6b5a073ea683724819a3467a254ea4e1624511feb2cef0cc"
+  }
+}

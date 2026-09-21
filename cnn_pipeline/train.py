@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 from pathlib import Path
@@ -32,6 +33,9 @@ def parse_args() -> argparse.Namespace:
                         help="Weight training cross entropy by inverse training class frequency")
     parser.add_argument("--class-weight-power", type=float, default=1.0,
                         help="Exponent for inverse-frequency weights (0.5 = square root)")
+    parser.add_argument("--train-resize", action="store_true",
+                        help="Resize full insect images instead of random crops; keep flip/color jitter")
+    parser.add_argument("--scheduler", choices=("plateau", "cosine"), default="plateau")
     return parser.parse_args()
 
 
@@ -126,6 +130,8 @@ def main() -> None:
         raise ValueError("Class weight power must be between 0 and 1")
     if not args.class_weighted and args.class_weight_power != 1.0:
         raise ValueError("--class-weight-power requires --class-weighted")
+    if args.train_resize and args.dataset != "insects":
+        raise ValueError("--train-resize is only supported for insects")
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = device.type == "cuda"
@@ -150,6 +156,7 @@ def main() -> None:
             pin_memory,
             args.limit_train,
             args.limit_eval,
+            train_resize=args.train_resize,
         )
 
     output_dir = args.output_dir / args.dataset
@@ -170,12 +177,21 @@ def main() -> None:
         "class_weights": class_weights.tolist() if class_weights is not None else None,
         "train_class_counts": class_counts.tolist() if class_counts is not None else None,
         "validation_loss": "unweighted cross entropy",
+        "source_sha256": {
+            name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
+            for name in ("train.py", "data.py", "model.py")
+        },
     }
     (output_dir / "run_config.json").write_text(json.dumps(run_config, indent=2) + "\n")
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=3)
+    scheduler = (
+        torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.epochs, eta_min=args.learning_rate * 0.01)
+        if args.scheduler == "cosine" else
+        torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=3)
+    )
     print(f"device={device} parameters={count_parameters(model):,} classes={len(bundle.class_names)}")
 
     history: list[dict[str, float | int]] = []
@@ -184,7 +200,10 @@ def main() -> None:
     for epoch in range(1, args.epochs + 1):
         train_metrics = run_epoch(model, bundle.train_loader, train_criterion, device, optimizer)
         val_metrics = run_epoch(model, bundle.val_loader, criterion, device)
-        scheduler.step(val_metrics["accuracy"])
+        if args.scheduler == "cosine":
+            scheduler.step()
+        else:
+            scheduler.step(val_metrics["accuracy"])
         record = {
             "epoch": epoch,
             "train_loss": train_metrics["loss"],

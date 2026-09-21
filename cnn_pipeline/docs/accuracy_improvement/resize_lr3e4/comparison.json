@@ -1,0 +1,24 @@
+{
+  "checkpoint": "outputs/resize_lr3e4_30epochs/insects/best.pt",
+  "checkpoint_sha256": "78806ee5fbab05225f8f8a7cea812a5df73c49acf337280f9f217e5bb0ed5e22",
+  "best_epoch": 30,
+  "baseline_val_accuracy": 0.5090191657271702,
+  "val_accuracy": 0.44306651634723787,
+  "accuracy_delta_pp": -6.5952649379932335,
+  "baseline_val_macro_recall": 0.3471535761732434,
+  "val_macro_recall": 0.27292380034797364,
+  "test_evaluated": false,
+  "split_manifest_sha256": "fd7fbe0b975f2c792cce5795836fd2708f66b1ff822759616e512dda4ffece7a",
+  "source_sha256": {
+    "train.py": "e675f4d125e3ba650d745cfe28ae4f217436b5c25c96887b425f110814685bb4",
+    "data.py": "206e75343c2030faa454bd797c27cd8f85c20f827e7f331d082eeb6693204994",
+    "model.py": "7a097e1f02fb562f6b5a073ea683724819a3467a254ea4e1624511feb2cef0cc",
+    "analyze_validation.py": "71c21c69ec4ee5dac2f59624fbcfa741fac699cd885fb53dd54772814a9bb4d9"
+  },
+  "versions": {
+    "python": "3.11.15",
+    "torch": "2.11.0+cu128",
+    "torchvision": "0.26.0+cu128"
+  },
+  "source_note": "This run started before the cosine scheduler option was added; uses the same source snapshot as resize_30epochs."
+}
