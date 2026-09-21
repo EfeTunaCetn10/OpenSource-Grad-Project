@@ -1,5 +1,5 @@
 {
-  "status": "planned_not_run",
+  "status": "completed",
   "single_change": "class-weighted CrossEntropyLoss",
   "weight_rule": "N_train / (num_classes * class_train_count)",
   "weights": {
@@ -26,5 +26,6 @@
   "evaluation": "validation accuracy, macro recall and per-class recall; no test evaluation",
   "checkpoint_selection": "validation accuracy, unchanged from baseline; also report validation macro recall",
   "baseline_validation_accuracy": 0.5090191657271702,
-  "baseline_validation_macro_recall": 0.3471535761732434
+  "baseline_validation_macro_recall": 0.3471535761732434,
+  "results": "../weighted_experiment/README.md"
 }

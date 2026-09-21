@@ -106,6 +106,14 @@ Training produces:
 - `test_metrics.json`: test loss, accuracy, macro recall, and confusion matrix
   when test evaluation is enabled.
 
+For a controlled class-imbalance experiment, add `--class-weighted --skip-test`
+and choose a fresh output directory. Class weights are computed only from the
+training labels as `N / (C * count[c])`. Training uses weighted cross entropy;
+validation uses ordinary cross entropy. `run_config.json` records the weights,
+counts, and run settings. Checkpoint selection still uses validation accuracy.
+Weighted training loss should not be compared directly with unweighted training
+loss; compare validation accuracy and macro recall instead.
+
 ## MNIST reference
 
 MNIST provides a separate one-channel reference for checking the training pipeline.
@@ -132,3 +140,6 @@ python -m pytest -q
 
 Raw datasets and checkpoint binaries remain local under `data/` and `outputs/`.
 Small reports and checkpoint identities are tracked under `docs/`.
+
+See the [class-weighted experiment](docs/weighted_experiment/README.md) for the
+validation accuracy/recall trade-off from inverse-frequency training weights.

@@ -104,3 +104,5 @@ aynı; checkpoint SHA256 baseline manifest'iyle aynı.
 Veri hazırlama, normalizasyon, FP32 eğitim, hata analizi ve sonraki deneyin
 planlanması tamamlandı. Bu oturum burada durduruldu. Sonraki konuşmada önce
 bu bulgular ve ağırlıklı loss deneyi ele alınacak; henüz PTQ'ya geçilmedi.
+
+Güncelleme (22 Eylül): planlanan deney tamamlandı; [sonuç raporu](../weighted_experiment/README.md). Yukarıdaki plan ilk inceleme anını kaydeder.

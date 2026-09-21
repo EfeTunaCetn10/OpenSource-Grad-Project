@@ -28,7 +28,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-eval", type=int)
     parser.add_argument("--skip-test", action="store_true",
                         help="Only train/validate; reserve test evaluation for the final run")
+    parser.add_argument("--class-weighted", action="store_true",
+                        help="Weight training cross entropy by inverse training class frequency")
     return parser.parse_args()
+
+
+def training_class_weights(dataset, num_classes: int) -> tuple[torch.Tensor, torch.Tensor]:
+    """Read training labels without loading images or consuming augmentation RNG."""
+    def labels(ds):
+        if isinstance(ds, torch.utils.data.Subset):
+            return labels(ds.dataset)[torch.as_tensor(ds.indices, dtype=torch.long)]
+        return torch.as_tensor(ds.targets, dtype=torch.long)
+
+    targets = labels(dataset)
+    if targets.numel() == 0 or targets.min() < 0 or targets.max() >= num_classes:
+        raise ValueError("Training labels must be nonempty and within class range")
+    counts = torch.bincount(targets, minlength=num_classes)
+    if (counts == 0).any():
+        raise ValueError("Every class needs training examples for inverse-frequency weights")
+    return targets.numel() / (num_classes * counts.float()), counts
 
 
 def set_seed(seed: int) -> None:
@@ -48,6 +66,7 @@ def run_epoch(
     training = optimizer is not None
     model.train(training)
     total_loss = 0.0
+    loss_denominator = 0.0
     correct = 0
     total = 0
 
@@ -62,11 +81,15 @@ def run_epoch(
             if training:
                 loss.backward()
                 optimizer.step()
-            total_loss += loss.item() * targets.size(0)
+            # CrossEntropyLoss(mean) divides by the sum of target weights.
+            weight = getattr(criterion, "weight", None)
+            denominator = targets.size(0) if weight is None else weight[targets].sum().item()
+            total_loss += loss.item() * denominator
+            loss_denominator += denominator
             correct += (logits.argmax(dim=1) == targets).sum().item()
             total += targets.size(0)
 
-    return {"loss": total_loss / total, "accuracy": correct / total}
+    return {"loss": total_loss / loss_denominator, "accuracy": correct / total}
 
 
 @torch.inference_mode()
@@ -127,6 +150,20 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     model = LeNet5(bundle.input_channels, len(bundle.class_names)).to(device)
     criterion = nn.CrossEntropyLoss()
+    class_weights, class_counts = None, None
+    if args.class_weighted:
+        class_weights, class_counts = training_class_weights(
+            bundle.train_loader.dataset, len(bundle.class_names))
+    train_criterion = nn.CrossEntropyLoss(
+        weight=class_weights.to(device) if class_weights is not None else None)
+    run_config = {
+        **{key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
+        "device": str(device), "class_names": bundle.class_names,
+        "class_weights": class_weights.tolist() if class_weights is not None else None,
+        "train_class_counts": class_counts.tolist() if class_counts is not None else None,
+        "validation_loss": "unweighted cross entropy",
+    }
+    (output_dir / "run_config.json").write_text(json.dumps(run_config, indent=2) + "\n")
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )
@@ -137,7 +174,7 @@ def main() -> None:
     best_accuracy = -1.0
     checkpoint_path = output_dir / "best.pt"
     for epoch in range(1, args.epochs + 1):
-        train_metrics = run_epoch(model, bundle.train_loader, criterion, device, optimizer)
+        train_metrics = run_epoch(model, bundle.train_loader, train_criterion, device, optimizer)
         val_metrics = run_epoch(model, bundle.val_loader, criterion, device)
         scheduler.step(val_metrics["accuracy"])
         record = {
@@ -167,6 +204,8 @@ def main() -> None:
                     "std": bundle.std,
                     "best_val_accuracy": best_accuracy,
                     "seed": args.seed,
+                    "best_epoch": epoch,
+                    "training_config": run_config,
                 },
                 checkpoint_path,
             )
