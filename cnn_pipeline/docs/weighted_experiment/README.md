@@ -91,3 +91,5 @@ Bir sonraki olası kontrollü deney, ağırlıkları karekök ile yumuşatmak ol
 olan göreli ağırlık oranı yaklaşık 2.83:1 olur. Bunun accuracy/recall dengesini
 iyileştireceği henüz bilinmiyor; **uygulanmadı**. Mimari ve veri ayrımı
 şimdilik değiştirilmedi; yeni deney kullanıcıyla konuşulduktan sonra ele alınacak.
+
+Güncelleme: önerilen karekök deneyi tamamlandı; [üç deneyin karşılaştırması](../sqrt_weighted_experiment/README.md).

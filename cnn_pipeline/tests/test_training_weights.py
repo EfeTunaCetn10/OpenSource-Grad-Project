@@ -38,3 +38,18 @@ def test_weighted_epoch_loss_matches_whole_dataset():
         loader = DataLoader(TensorDataset(logits, labels), batch_size=batch_size)
         metrics = run_epoch(nn.Identity(), loader, criterion, torch.device('cpu'))
         assert metrics['loss'] == pytest.approx(expected, rel=1e-6)
+
+
+def test_square_root_softens_relative_weights():
+    original, _ = training_class_weights(LabelsOnly(), 2)
+    softened, _ = training_class_weights(LabelsOnly(), 2, power=0.5)
+    assert torch.allclose(softened.square(), original)
+    assert (softened[1] / softened[0]).item() == pytest.approx(3 ** 0.5)
+    uniform, _ = training_class_weights(LabelsOnly(), 2, power=0.0)
+    assert torch.equal(uniform, torch.ones(2))
+
+
+@pytest.mark.parametrize('power', [-1, 2, float('nan')])
+def test_invalid_weight_power(power):
+    with pytest.raises(ValueError):
+        training_class_weights(LabelsOnly(), 2, power=power)

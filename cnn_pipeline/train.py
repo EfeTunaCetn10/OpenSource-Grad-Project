@@ -30,11 +30,15 @@ def parse_args() -> argparse.Namespace:
                         help="Only train/validate; reserve test evaluation for the final run")
     parser.add_argument("--class-weighted", action="store_true",
                         help="Weight training cross entropy by inverse training class frequency")
+    parser.add_argument("--class-weight-power", type=float, default=1.0,
+                        help="Exponent for inverse-frequency weights (0.5 = square root)")
     return parser.parse_args()
 
 
-def training_class_weights(dataset, num_classes: int) -> tuple[torch.Tensor, torch.Tensor]:
+def training_class_weights(dataset, num_classes: int, power: float = 1.0) -> tuple[torch.Tensor, torch.Tensor]:
     """Read training labels without loading images or consuming augmentation RNG."""
+    if not 0.0 <= power <= 1.0:
+        raise ValueError("Class weight power must be between 0 and 1")
     def labels(ds):
         if isinstance(ds, torch.utils.data.Subset):
             return labels(ds.dataset)[torch.as_tensor(ds.indices, dtype=torch.long)]
@@ -46,7 +50,7 @@ def training_class_weights(dataset, num_classes: int) -> tuple[torch.Tensor, tor
     counts = torch.bincount(targets, minlength=num_classes)
     if (counts == 0).any():
         raise ValueError("Every class needs training examples for inverse-frequency weights")
-    return targets.numel() / (num_classes * counts.float()), counts
+    return (targets.numel() / (num_classes * counts.float())).pow(power), counts
 
 
 def set_seed(seed: int) -> None:
@@ -118,6 +122,10 @@ def main() -> None:
     args = parse_args()
     if args.epochs <= 0 or args.batch_size <= 0:
         raise ValueError("epochs and batch size must be positive")
+    if not 0.0 <= args.class_weight_power <= 1.0:
+        raise ValueError("Class weight power must be between 0 and 1")
+    if not args.class_weighted and args.class_weight_power != 1.0:
+        raise ValueError("--class-weight-power requires --class-weighted")
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = device.type == "cuda"
@@ -153,7 +161,7 @@ def main() -> None:
     class_weights, class_counts = None, None
     if args.class_weighted:
         class_weights, class_counts = training_class_weights(
-            bundle.train_loader.dataset, len(bundle.class_names))
+            bundle.train_loader.dataset, len(bundle.class_names), args.class_weight_power)
     train_criterion = nn.CrossEntropyLoss(
         weight=class_weights.to(device) if class_weights is not None else None)
     run_config = {

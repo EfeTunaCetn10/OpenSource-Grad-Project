@@ -108,7 +108,8 @@ Training produces:
 
 For a controlled class-imbalance experiment, add `--class-weighted --skip-test`
 and choose a fresh output directory. Class weights are computed only from the
-training labels as `N / (C * count[c])`. Training uses weighted cross entropy;
+training labels as `(N / (C * count[c])) ** power`. The default power is 1;
+add `--class-weight-power 0.5` for square-root weights. Training uses weighted cross entropy;
 validation uses ordinary cross entropy. `run_config.json` records the weights,
 counts, and run settings. Checkpoint selection still uses validation accuracy.
 Weighted training loss should not be compared directly with unweighted training
@@ -143,3 +144,6 @@ Small reports and checkpoint identities are tracked under `docs/`.
 
 See the [class-weighted experiment](docs/weighted_experiment/README.md) for the
 validation accuracy/recall trade-off from inverse-frequency training weights.
+
+The [square-root weighting experiment](docs/sqrt_weighted_experiment/README.md)
+compares all three approaches on the same validation split.
