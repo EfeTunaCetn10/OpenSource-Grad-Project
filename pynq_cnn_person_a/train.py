@@ -26,6 +26,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--limit-train", type=int)
     parser.add_argument("--limit-eval", type=int)
+    parser.add_argument("--skip-test", action="store_true",
+                        help="Only train/validate; reserve test evaluation for the final run")
     return parser.parse_args()
 
 
@@ -120,6 +122,8 @@ def main() -> None:
         )
 
     output_dir = args.output_dir / args.dataset
+    if output_dir.exists() and any(output_dir.iterdir()):
+        raise FileExistsError(f"Use a new output directory to preserve previous results: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     model = LeNet5(bundle.input_channels, len(bundle.class_names)).to(device)
     criterion = nn.CrossEntropyLoss()
@@ -168,6 +172,9 @@ def main() -> None:
             )
 
     (output_dir / "history.json").write_text(json.dumps(history, indent=2), encoding="utf-8")
+    if args.skip_test:
+        print(f"best_val_acc={best_accuracy:.4f}; test evaluation skipped")
+        return
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint["model_state"])
     test_metrics = evaluate_with_macro_recall(
@@ -184,4 +191,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

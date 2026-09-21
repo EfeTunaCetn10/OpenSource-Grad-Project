@@ -11,6 +11,11 @@ The floating-point model in this repository is the training baseline. INT8
 quantization and golden-reference export should be added only after this model
 and dataset pipeline are stable.
 
+The first 10-label insect FP32 baseline is now trained. See the
+[30-epoch report](docs/fp32_baseline/README.md) for its 50.31% test accuracy,
+34.79% macro recall, per-class limitations, and checkpoint identity. INT8
+quantization and the integer golden model remain the next stages.
+
 ## 1. Environment
 
 Python 3.10 or 3.11 is recommended.
@@ -53,6 +58,11 @@ still call it `LeNet5` in the code, but this distinction must be documented in
 the project report.
 
 ## 3. Week 4: insect dataset
+
+For the downloaded **Insect Detect v2** archive, use the
+[capture-day preparation guide](docs/insect_detect_preparation.md) and
+`prepare_insect_detect.py`. Its repeated captures must stay grouped; do not
+use the generic random-image split below for this archive.
 
 ### Required raw layout
 
@@ -109,6 +119,10 @@ python train.py \
 Results are written under `outputs/insects/`. The checkpoint includes the class
 names, RGB mean/std values, image size, and model configuration.
 
+For preliminary runs, add `--skip-test` to evaluate only train/validation.
+Use a distinct `--output-dir` for each run: training refuses to overwrite a
+nonempty result directory. The dataset name is appended to that directory.
+
 ## 4. Verification checklist
 
 - [ ] MNIST one-epoch smoke test completes.
@@ -135,4 +149,3 @@ IP102 is a strong research benchmark but is not an easy starter dataset: it has
 first prototype is a documented 5-10 class subset with balanced train/validation/
 test splits. Keep the original IP102 split if the final report claims direct
 comparison with published IP102 results.
-

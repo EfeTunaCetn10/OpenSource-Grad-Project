@@ -1,0 +1,38 @@
+{
+  "epochs": 3,
+  "seed": 42,
+  "device": "cpu",
+  "batch_size": 128,
+  "learning_rate": 0.001,
+  "test_evaluated": false,
+  "best_epoch": 3,
+  "best_val_accuracy": 0.37936865839909806,
+  "train_majority_class": "hfly_episyr",
+  "majority_baseline_val_accuracy": 0.25422773393461107,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 2.040701104465112,
+      "train_accuracy": 0.2864190763327395,
+      "val_loss": 1.9356538472611042,
+      "val_accuracy": 0.3015783540022548,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 2,
+      "train_loss": 1.8513020376187408,
+      "train_accuracy": 0.3630259010552282,
+      "val_loss": 1.911518268144386,
+      "val_accuracy": 0.32525366403607664,
+      "learning_rate": 0.001
+    },
+    {
+      "epoch": 3,
+      "train_loss": 1.7383025630673465,
+      "train_accuracy": 0.3834452514732082,
+      "val_loss": 1.7506404449867154,
+      "val_accuracy": 0.37936865839909806,
+      "learning_rate": 0.001
+    }
+  ]
+}

@@ -1,0 +1,126 @@
+{
+  "status": "FP32 baseline for PTQ; no claim of task acceptance",
+  "checkpoint_path": "outputs/fp32_30epochs/insects/best.pt",
+  "checkpoint_sha256": "33d2a3b9ce8c548f9c29f6dec7adcfe39f7fe5ea7c68bfd16b0eb934526ad811",
+  "best_epoch": 26,
+  "best_val_accuracy": 0.5090191657271702,
+  "input_shape": [
+    1,
+    3,
+    32,
+    32
+  ],
+  "num_classes": 10,
+  "class_names": [
+    "bee",
+    "beetle",
+    "beetle_cocci",
+    "bug",
+    "fly",
+    "fly_sarco",
+    "fly_small",
+    "hfly_episyr",
+    "hfly_eupeo",
+    "hfly_sphaero"
+  ],
+  "mean": [
+    0.4525560220366023,
+    0.4813439340749695,
+    0.19916884506781363
+  ],
+  "std": [
+    0.22734425304237743,
+    0.2079375971691783,
+    0.2056275746970152
+  ],
+  "seed": 42,
+  "training": {
+    "epochs": 30,
+    "batch_size": 128,
+    "learning_rate": 0.001,
+    "weight_decay": 0.0001,
+    "optimizer": "AdamW",
+    "scheduler": "ReduceLROnPlateau(mode=max, patience=3)",
+    "workers": 0,
+    "device": "cpu",
+    "OMP_NUM_THREADS": 2,
+    "MKL_NUM_THREADS": 2
+  },
+  "versions": {
+    "python": "3.11.15",
+    "torch": "2.11.0+cu128",
+    "torchvision": "0.26.0+cu128"
+  },
+  "split_manifest_sha256": "fd7fbe0b975f2c792cce5795836fd2708f66b1ff822759616e512dda4ffece7a",
+  "source_sha256": {
+    "train.py": "8b76c8d0048725b3a8db722547e8afa57c3ea495b243acaa8a07344739ddd094",
+    "model.py": "7a097e1f02fb562f6b5a073ea683724819a3467a254ea4e1624511feb2cef0cc",
+    "data.py": "b8e25ac64036f417fa256b7ca7ed43851a1304065112b7450f825b4251cef81d",
+    "compute_stats.py": "2c9666b6ba9ed78dbb02c2cd09cab73337a3b1fb991e61602b27140e82bc6cb9",
+    "prepare_insect_detect.py": "b1d09711530e82287ee559d62e0382feabdfa3c4a206ac302721913704b8b0e7"
+  },
+  "test_accuracy": 0.5030788177339901,
+  "test_macro_recall": 0.34786683320999146,
+  "per_class_test": [
+    {
+      "class": "bee",
+      "support": 213,
+      "correct": 103,
+      "recall": 0.4835680751173709
+    },
+    {
+      "class": "beetle",
+      "support": 76,
+      "correct": 2,
+      "recall": 0.02631578947368421
+    },
+    {
+      "class": "beetle_cocci",
+      "support": 135,
+      "correct": 93,
+      "recall": 0.6888888888888889
+    },
+    {
+      "class": "bug",
+      "support": 27,
+      "correct": 0,
+      "recall": 0.0
+    },
+    {
+      "class": "fly",
+      "support": 215,
+      "correct": 91,
+      "recall": 0.4232558139534884
+    },
+    {
+      "class": "fly_sarco",
+      "support": 37,
+      "correct": 0,
+      "recall": 0.0
+    },
+    {
+      "class": "fly_small",
+      "support": 279,
+      "correct": 193,
+      "recall": 0.6917562724014337
+    },
+    {
+      "class": "hfly_episyr",
+      "support": 296,
+      "correct": 251,
+      "recall": 0.847972972972973
+    },
+    {
+      "class": "hfly_eupeo",
+      "support": 297,
+      "correct": 82,
+      "recall": 0.2760942760942761
+    },
+    {
+      "class": "hfly_sphaero",
+      "support": 49,
+      "correct": 2,
+      "recall": 0.04081632653061224
+    }
+  ]
+}

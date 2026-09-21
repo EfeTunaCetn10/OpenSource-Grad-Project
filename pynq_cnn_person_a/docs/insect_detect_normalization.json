@@ -1,0 +1,43 @@
+{
+  "stats": {
+    "mean": [
+      0.4525560220366023,
+      0.4813439340749695,
+      0.19916884506781363
+    ],
+    "std": [
+      0.22734425304237743,
+      0.2079375971691783,
+      0.2056275746970152
+    ],
+    "image_size": [
+      32,
+      32
+    ],
+    "images": 7297,
+    "source_split": "train"
+  },
+  "split_manifest_sha256": "fd7fbe0b975f2c792cce5795836fd2708f66b1ff822759616e512dda4ffece7a",
+  "normalized_train_mean": [
+    2.8628196760067482e-08,
+    3.7804840444982666e-08,
+    -1.4264325512830077e-08
+  ],
+  "normalized_train_std": [
+    0.9999999798031137,
+    1.0000000040914863,
+    0.9999999784350834
+  ],
+  "checked_batch_shape": [
+    32,
+    3,
+    32,
+    32
+  ],
+  "checked_output_shape": [
+    32,
+    10
+  ],
+  "note": "Untrained model forward-pass check only; no accuracy evaluation or training performed. Normalization check excludes random augmentation.",
+  "torch_version": "2.11.0+cu128"
+}

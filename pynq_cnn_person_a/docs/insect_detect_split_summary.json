@@ -1,0 +1,809 @@
+{
+  "archive": "Insect_Detect_classification_v2.zip",
+  "archive_md5": "0d54a626b7e9958de8278ad93373f89d",
+  "archive_sha256": "64f5c6edc03dc176ce23ad7c61ee2c5004727d98d6132467258b7d9af4754ba0",
+  "seed": 42,
+  "search_trials": 4000,
+  "target_ratios": {
+    "train": 0.7,
+    "val": 0.15,
+    "test": 0.15
+  },
+  "grouping": "global capture day; days linked by identical file SHA256 are merged",
+  "limitation": "Capture day is a proxy, not a verified individual-insect ID. Near-duplicates across days remain possible.",
+  "selection_rule": "Exclude none_* and other; images >= 300; days >= 20; largest day share <= 0.5",
+  "class_to_idx": {
+    "bee": 0,
+    "beetle": 1,
+    "beetle_cocci": 2,
+    "bug": 3,
+    "fly": 4,
+    "fly_sarco": 5,
+    "fly_small": 6,
+    "hfly_episyr": 7,
+    "hfly_eupeo": 8,
+    "hfly_sphaero": 9
+  },
+  "source_class_summary": {
+    "ant": {
+      "images": 1097,
+      "days": 28,
+      "largest_day_images": 946,
+      "selected": false
+    },
+    "bee": {
+      "images": 1061,
+      "days": 63,
+      "largest_day_images": 97,
+      "selected": true
+    },
+    "bee_apis": {
+      "images": 294,
+      "days": 22,
+      "largest_day_images": 224,
+      "selected": false
+    },
+    "bee_bombus": {
+      "images": 1262,
+      "days": 12,
+      "largest_day_images": 1096,
+      "selected": false
+    },
+    "beetle": {
+      "images": 520,
+      "days": 51,
+      "largest_day_images": 64,
+      "selected": true
+    },
+    "beetle_cocci": {
+      "images": 776,
+      "days": 24,
+      "largest_day_images": 358,
+      "selected": true
+    },
+    "beetle_oedem": {
+      "images": 199,
+      "days": 35,
+      "largest_day_images": 22,
+      "selected": false
+    },
+    "bug": {
+      "images": 390,
+      "days": 27,
+      "largest_day_images": 129,
+      "selected": true
+    },
+    "bug_grapho": {
+      "images": 185,
+      "days": 2,
+      "largest_day_images": 118,
+      "selected": false
+    },
+    "fly": {
+      "images": 1717,
+      "days": 65,
+      "largest_day_images": 322,
+      "selected": true
+    },
+    "fly_empi": {
+      "images": 177,
+      "days": 28,
+      "largest_day_images": 44,
+      "selected": false
+    },
+    "fly_sarco": {
+      "images": 319,
+      "days": 35,
+      "largest_day_images": 40,
+      "selected": true
+    },
+    "fly_small": {
+      "images": 1662,
+      "days": 66,
+      "largest_day_images": 101,
+      "selected": true
+    },
+    "hfly_episyr": {
+      "images": 2518,
+      "days": 66,
+      "largest_day_images": 323,
+      "selected": true
+    },
+    "hfly_eristal": {
+      "images": 1954,
+      "days": 18,
+      "largest_day_images": 911,
+      "selected": false
+    },
+    "hfly_eupeo": {
+      "images": 1358,
+      "days": 71,
+      "largest_day_images": 153,
+      "selected": true
+    },
+    "hfly_myathr": {
+      "images": 593,
+      "days": 5,
+      "largest_day_images": 483,
+      "selected": false
+    },
+    "hfly_sphaero": {
+      "images": 374,
+      "days": 27,
+      "largest_day_images": 62,
+      "selected": true
+    },
+    "hfly_syrphus": {
+      "images": 488,
+      "days": 13,
+      "largest_day_images": 449,
+      "selected": false
+    },
+    "lepi": {
+      "images": 228,
+      "days": 29,
+      "largest_day_images": 40,
+      "selected": false
+    },
+    "none_bg": {
+      "images": 851,
+      "days": 48,
+      "largest_day_images": 75,
+      "selected": false
+    },
+    "none_bird": {
+      "images": 67,
+      "days": 12,
+      "largest_day_images": 19,
+      "selected": false
+    },
+    "none_dirt": {
+      "images": 838,
+      "days": 77,
+      "largest_day_images": 55,
+      "selected": false
+    },
+    "none_shadow": {
+      "images": 647,
+      "days": 59,
+      "largest_day_images": 88,
+      "selected": false
+    },
+    "other": {
+      "images": 790,
+      "days": 78,
+      "largest_day_images": 79,
+      "selected": false
+    },
+    "scorpionfly": {
+      "images": 120,
+      "days": 15,
+      "largest_day_images": 35,
+      "selected": false
+    },
+    "wasp": {
+      "images": 515,
+      "days": 19,
+      "largest_day_images": 137,
+      "selected": false
+    }
+  },
+  "classes": {
+    "bee": {
+      "train": 660,
+      "val": 188,
+      "test": 213
+    },
+    "beetle": {
+      "train": 359,
+      "val": 85,
+      "test": 76
+    },
+    "beetle_cocci": {
+      "train": 521,
+      "val": 120,
+      "test": 135
+    },
+    "bug": {
+      "train": 314,
+      "val": 49,
+      "test": 27
+    },
+    "fly": {
+      "train": 1225,
+      "val": 277,
+      "test": 215
+    },
+    "fly_sarco": {
+      "train": 221,
+      "val": 61,
+      "test": 37
+    },
+    "fly_small": {
+      "train": 1154,
+      "val": 229,
+      "test": 279
+    },
+    "hfly_episyr": {
+      "train": 1771,
+      "val": 451,
+      "test": 296
+    },
+    "hfly_eupeo": {
+      "train": 815,
+      "val": 246,
+      "test": 297
+    },
+    "hfly_sphaero": {
+      "train": 257,
+      "val": 68,
+      "test": 49
+    }
+  },
+  "groups": {
+    "20220907": {
+      "split": "train",
+      "days": [
+        "20220907"
+      ]
+    },
+    "20221006": {
+      "split": "test",
+      "days": [
+        "20221006"
+      ]
+    },
+    "20221009": {
+      "split": "train",
+      "days": [
+        "20221009"
+      ]
+    },
+    "20221012": {
+      "split": "test",
+      "days": [
+        "20221012"
+      ]
+    },
+    "20221013": {
+      "split": "val",
+      "days": [
+        "20221013"
+      ]
+    },
+    "20221014": {
+      "split": "val",
+      "days": [
+        "20221014"
+      ]
+    },
+    "20221015": {
+      "split": "train",
+      "days": [
+        "20221015"
+      ]
+    },
+    "20221016": {
+      "split": "train",
+      "days": [
+        "20221016"
+      ]
+    },
+    "20221017": {
+      "split": "test",
+      "days": [
+        "20221017"
+      ]
+    },
+    "20221018": {
+      "split": "train",
+      "days": [
+        "20221018"
+      ]
+    },
+    "20221019": {
+      "split": "train",
+      "days": [
+        "20221019"
+      ]
+    },
+    "20221020": {
+      "split": "train",
+      "days": [
+        "20221020"
+      ]
+    },
+    "20221021": {
+      "split": "val",
+      "days": [
+        "20221021"
+      ]
+    },
+    "20230120": {
+      "split": "train",
+      "days": [
+        "20230120"
+      ]
+    },
+    "20230123": {
+      "split": "train",
+      "days": [
+        "20230123"
+      ]
+    },
+    "20230131": {
+      "split": "val",
+      "days": [
+        "20230131"
+      ]
+    },
+    "20230505": {
+      "split": "train",
+      "days": [
+        "20230505"
+      ]
+    },
+    "20230506": {
+      "split": "train",
+      "days": [
+        "20230506"
+      ]
+    },
+    "20230516": {
+      "split": "train",
+      "days": [
+        "20230516"
+      ]
+    },
+    "20230517": {
+      "split": "train",
+      "days": [
+        "20230517"
+      ]
+    },
+    "20230518": {
+      "split": "val",
+      "days": [
+        "20230518"
+      ]
+    },
+    "20230519": {
+      "split": "test",
+      "days": [
+        "20230519"
+      ]
+    },
+    "20230520": {
+      "split": "train",
+      "days": [
+        "20230520"
+      ]
+    },
+    "20230521": {
+      "split": "train",
+      "days": [
+        "20230521"
+      ]
+    },
+    "20230522": {
+      "split": "train",
+      "days": [
+        "20230522"
+      ]
+    },
+    "20230523": {
+      "split": "val",
+      "days": [
+        "20230523"
+      ]
+    },
+    "20230524": {
+      "split": "train",
+      "days": [
+        "20230524"
+      ]
+    },
+    "20230525": {
+      "split": "val",
+      "days": [
+        "20230525"
+      ]
+    },
+    "20230526": {
+      "split": "train",
+      "days": [
+        "20230526"
+      ]
+    },
+    "20230527": {
+      "split": "train",
+      "days": [
+        "20230527"
+      ]
+    },
+    "20230528": {
+      "split": "train",
+      "days": [
+        "20230528"
+      ]
+    },
+    "20230529": {
+      "split": "train",
+      "days": [
+        "20230529"
+      ]
+    },
+    "20230530": {
+      "split": "train",
+      "days": [
+        "20230530"
+      ]
+    },
+    "20230531": {
+      "split": "train",
+      "days": [
+        "20230531"
+      ]
+    },
+    "20230601": {
+      "split": "train",
+      "days": [
+        "20230601"
+      ]
+    },
+    "20230602": {
+      "split": "train",
+      "days": [
+        "20230602"
+      ]
+    },
+    "20230603": {
+      "split": "train",
+      "days": [
+        "20230603"
+      ]
+    },
+    "20230604": {
+      "split": "val",
+      "days": [
+        "20230604"
+      ]
+    },
+    "20230605": {
+      "split": "train",
+      "days": [
+        "20230605"
+      ]
+    },
+    "20230606": {
+      "split": "test",
+      "days": [
+        "20230606"
+      ]
+    },
+    "20230607": {
+      "split": "train",
+      "days": [
+        "20230607"
+      ]
+    },
+    "20230608": {
+      "split": "train",
+      "days": [
+        "20230608"
+      ]
+    },
+    "20230609": {
+      "split": "train",
+      "days": [
+        "20230609"
+      ]
+    },
+    "20230610": {
+      "split": "train",
+      "days": [
+        "20230610"
+      ]
+    },
+    "20230611": {
+      "split": "train",
+      "days": [
+        "20230611"
+      ]
+    },
+    "20230612": {
+      "split": "train",
+      "days": [
+        "20230612"
+      ]
+    },
+    "20230613": {
+      "split": "train",
+      "days": [
+        "20230613"
+      ]
+    },
+    "20230614": {
+      "split": "val",
+      "days": [
+        "20230614"
+      ]
+    },
+    "20230615": {
+      "split": "train",
+      "days": [
+        "20230615"
+      ]
+    },
+    "20230616": {
+      "split": "test",
+      "days": [
+        "20230616"
+      ]
+    },
+    "20230617": {
+      "split": "test",
+      "days": [
+        "20230617"
+      ]
+    },
+    "20230618": {
+      "split": "train",
+      "days": [
+        "20230618"
+      ]
+    },
+    "20230619": {
+      "split": "train",
+      "days": [
+        "20230619"
+      ]
+    },
+    "20230620": {
+      "split": "test",
+      "days": [
+        "20230620"
+      ]
+    },
+    "20230621": {
+      "split": "train",
+      "days": [
+        "20230621"
+      ]
+    },
+    "20230622": {
+      "split": "val",
+      "days": [
+        "20230622"
+      ]
+    },
+    "20230623": {
+      "split": "train",
+      "days": [
+        "20230623"
+      ]
+    },
+    "20230624": {
+      "split": "test",
+      "days": [
+        "20230624"
+      ]
+    },
+    "20230625": {
+      "split": "val",
+      "days": [
+        "20230625"
+      ]
+    },
+    "20230626": {
+      "split": "train",
+      "days": [
+        "20230626"
+      ]
+    },
+    "20230627": {
+      "split": "test",
+      "days": [
+        "20230627"
+      ]
+    },
+    "20230628": {
+      "split": "val",
+      "days": [
+        "20230628"
+      ]
+    },
+    "20230629": {
+      "split": "val",
+      "days": [
+        "20230629"
+      ]
+    },
+    "20230630": {
+      "split": "train",
+      "days": [
+        "20230630"
+      ]
+    },
+    "20230701": {
+      "split": "train",
+      "days": [
+        "20230701"
+      ]
+    },
+    "20230702": {
+      "split": "train",
+      "days": [
+        "20230702"
+      ]
+    },
+    "20230703": {
+      "split": "test",
+      "days": [
+        "20230703"
+      ]
+    },
+    "20230704": {
+      "split": "train",
+      "days": [
+        "20230704"
+      ]
+    },
+    "20230705": {
+      "split": "train",
+      "days": [
+        "20230705"
+      ]
+    },
+    "20230706": {
+      "split": "test",
+      "days": [
+        "20230706"
+      ]
+    },
+    "20230707": {
+      "split": "train",
+      "days": [
+        "20230707"
+      ]
+    },
+    "20230708": {
+      "split": "train",
+      "days": [
+        "20230708"
+      ]
+    },
+    "20230709": {
+      "split": "train",
+      "days": [
+        "20230709"
+      ]
+    },
+    "20230710": {
+      "split": "train",
+      "days": [
+        "20230710"
+      ]
+    },
+    "20230711": {
+      "split": "test",
+      "days": [
+        "20230711"
+      ]
+    },
+    "20230712": {
+      "split": "train",
+      "days": [
+        "20230712"
+      ]
+    },
+    "20230713": {
+      "split": "train",
+      "days": [
+        "20230713"
+      ]
+    },
+    "20230714": {
+      "split": "train",
+      "days": [
+        "20230714"
+      ]
+    },
+    "20230715": {
+      "split": "train",
+      "days": [
+        "20230715"
+      ]
+    },
+    "20230716": {
+      "split": "test",
+      "days": [
+        "20230716"
+      ]
+    },
+    "20230717": {
+      "split": "train",
+      "days": [
+        "20230717"
+      ]
+    },
+    "20230718": {
+      "split": "train",
+      "days": [
+        "20230718"
+      ]
+    },
+    "20230719": {
+      "split": "train",
+      "days": [
+        "20230719"
+      ]
+    },
+    "20230720": {
+      "split": "train",
+      "days": [
+        "20230720"
+      ]
+    },
+    "20230721": {
+      "split": "train",
+      "days": [
+        "20230721"
+      ]
+    },
+    "20230722": {
+      "split": "train",
+      "days": [
+        "20230722"
+      ]
+    },
+    "20230723": {
+      "split": "val",
+      "days": [
+        "20230723"
+      ]
+    },
+    "20230724": {
+      "split": "test",
+      "days": [
+        "20230724"
+      ]
+    },
+    "20230726": {
+      "split": "train",
+      "days": [
+        "20230726"
+      ]
+    },
+    "20230801": {
+      "split": "train",
+      "days": [
+        "20230801"
+      ]
+    },
+    "20230807": {
+      "split": "train",
+      "days": [
+        "20230807"
+      ]
+    },
+    "20230808": {
+      "split": "train",
+      "days": [
+        "20230808"
+      ]
+    },
+    "20230809": {
+      "split": "train",
+      "days": [
+        "20230809"
+      ]
+    },
+    "20230810": {
+      "split": "train",
+      "days": [
+        "20230810"
+      ]
+    }
+  }
+}
