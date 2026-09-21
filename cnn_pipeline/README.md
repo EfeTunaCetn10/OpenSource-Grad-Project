@@ -157,3 +157,7 @@ For full-image augmentation, use `--train-resize` to replace random crops with
 `--scheduler cosine` gradually lowers the learning rate over `--epochs`; the
 default remains validation-driven `plateau`. Run configuration and source
 hashes are stored with each new checkpoint.
+
+A [seed repeat](docs/seed_repeat/README.md) of the selected training recipe
+reached 54.62% validation accuracy versus 55.41% with seed 42. The original
+checkpoint remains selected; no test evaluation was run for the repeat.

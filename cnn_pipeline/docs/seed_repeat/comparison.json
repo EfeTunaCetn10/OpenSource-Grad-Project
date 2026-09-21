@@ -1,0 +1,22 @@
+{
+  "seed42": {
+    "best_epoch": 51,
+    "validation_accuracy": 0.5541149943630215,
+    "validation_macro_recall": 0.40327522225711876,
+    "final_epoch_accuracy": 0.5512965050732808
+  },
+  "seed123": {
+    "best_epoch": 40,
+    "validation_accuracy": 0.5462232243517474,
+    "validation_macro_recall": 0.3769405524481283,
+    "final_epoch_accuracy": 0.5366403607666291
+  },
+  "accuracy_difference_pp": -0.7891770011274057,
+  "macro_recall_difference_pp": -2.6334669808990463,
+  "checkpoint": "outputs/resize_cosine_seed123_60epochs/insects/best.pt",
+  "checkpoint_sha256": "673b010854694308bd050f3edf47b71834a0d6c3db2ba879128e1df8df7cd68c",
+  "test_evaluated": false,
+  "shuffle_seed": 42,
+  "same_source_and_hyperparameters": true,
+  "split_manifest_sha256": "fd7fbe0b975f2c792cce5795836fd2708f66b1ff822759616e512dda4ffece7a"
+}
