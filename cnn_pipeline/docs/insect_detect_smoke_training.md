@@ -4,7 +4,7 @@
 kullanıldı. LeNet 3 giriş kanalı, 10 çıkış sınıfı ve 62.006 öğrenilen parametre
 içeriyor. Çalışma CPU üzerinde tamamlandı.
 
-`pynq_cnn_person_a` dizininden çalıştırılan komut:
+`cnn_pipeline` dizininden çalıştırılan komut:
 
 ```bash
 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -u train.py \

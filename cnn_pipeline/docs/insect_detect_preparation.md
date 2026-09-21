@@ -49,7 +49,7 @@ incelenmelidir. Özellikle küçük sınıfların test ölçümleri daha değiş
 
 ## Tekrar üretme
 
-`pynq_cnn_person_a` dizininde, hedef klasör henüz yokken:
+`cnn_pipeline` dizininde, hedef klasör henüz yokken:
 
 ```bash
 python prepare_insect_detect.py \

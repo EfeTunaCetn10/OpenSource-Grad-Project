@@ -39,7 +39,7 @@ yalnız epoch sayısını artırmanın sorunu çözeceği varsayılmamalıdır.
 ## Tekrar üretme
 
 Önce `../insect_detect_preparation.md` ile aynı veri bölmesini ve stats.json'u
-üretin. `pynq_cnn_person_a` dizininde, henüz kullanılmamış bir output-dir ile:
+üretin. `cnn_pipeline` dizininde, henüz kullanılmamış bir output-dir ile:
 
 ```bash
 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 python -u train.py \
