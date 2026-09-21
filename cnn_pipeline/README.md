@@ -128,6 +128,7 @@ python -m pytest -q
 - [Dataset preparation and normalization](docs/insect_detect_preparation.md)
 - [Three-epoch training check](docs/insect_detect_smoke_training.md)
 - [FP32 evaluation and checkpoint manifest](docs/fp32_baseline/README.md)
+- [Validation error analysis and next experiment](docs/validation_review/README.md)
 
 Raw datasets and checkpoint binaries remain local under `data/` and `outputs/`.
 Small reports and checkpoint identities are tracked under `docs/`.

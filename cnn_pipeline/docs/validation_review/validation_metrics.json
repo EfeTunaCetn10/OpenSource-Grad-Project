@@ -1,0 +1,352 @@
+{
+  "split": "val",
+  "checkpoint_sha256": "33d2a3b9ce8c548f9c29f6dec7adcfe39f7fe5ea7c68bfd16b0eb934526ad811",
+  "class_names": [
+    "bee",
+    "beetle",
+    "beetle_cocci",
+    "bug",
+    "fly",
+    "fly_sarco",
+    "fly_small",
+    "hfly_episyr",
+    "hfly_eupeo",
+    "hfly_sphaero"
+  ],
+  "accuracy": 0.5090191657271702,
+  "macro_recall": 0.3471535761732434,
+  "confusion_matrix": [
+    [
+      82,
+      0,
+      0,
+      0,
+      27,
+      0,
+      46,
+      19,
+      12,
+      2
+    ],
+    [
+      15,
+      0,
+      0,
+      1,
+      11,
+      0,
+      40,
+      10,
+      8,
+      0
+    ],
+    [
+      0,
+      4,
+      67,
+      10,
+      14,
+      0,
+      7,
+      15,
+      3,
+      0
+    ],
+    [
+      0,
+      6,
+      23,
+      6,
+      2,
+      0,
+      1,
+      9,
+      2,
+      0
+    ],
+    [
+      7,
+      0,
+      0,
+      2,
+      181,
+      0,
+      79,
+      2,
+      6,
+      0
+    ],
+    [
+      1,
+      0,
+      0,
+      0,
+      48,
+      0,
+      10,
+      0,
+      2,
+      0
+    ],
+    [
+      10,
+      0,
+      0,
+      0,
+      47,
+      0,
+      119,
+      42,
+      10,
+      1
+    ],
+    [
+      6,
+      3,
+      0,
+      2,
+      4,
+      0,
+      13,
+      398,
+      21,
+      4
+    ],
+    [
+      23,
+      1,
+      0,
+      5,
+      21,
+      0,
+      24,
+      127,
+      41,
+      4
+    ],
+    [
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      2,
+      56,
+      0,
+      9
+    ]
+  ],
+  "per_class": [
+    {
+      "label": "bee",
+      "support": 188,
+      "correct": 82,
+      "recall": 0.43617021276595747,
+      "predicted_count": 144,
+      "top_confusions": [
+        [
+          "fly_small",
+          46
+        ],
+        [
+          "fly",
+          27
+        ],
+        [
+          "hfly_episyr",
+          19
+        ]
+      ]
+    },
+    {
+      "label": "beetle",
+      "support": 85,
+      "correct": 0,
+      "recall": 0.0,
+      "predicted_count": 15,
+      "top_confusions": [
+        [
+          "fly_small",
+          40
+        ],
+        [
+          "bee",
+          15
+        ],
+        [
+          "fly",
+          11
+        ]
+      ]
+    },
+    {
+      "label": "beetle_cocci",
+      "support": 120,
+      "correct": 67,
+      "recall": 0.5583333333333333,
+      "predicted_count": 90,
+      "top_confusions": [
+        [
+          "hfly_episyr",
+          15
+        ],
+        [
+          "fly",
+          14
+        ],
+        [
+          "bug",
+          10
+        ]
+      ]
+    },
+    {
+      "label": "bug",
+      "support": 49,
+      "correct": 6,
+      "recall": 0.12244897959183673,
+      "predicted_count": 26,
+      "top_confusions": [
+        [
+          "beetle_cocci",
+          23
+        ],
+        [
+          "hfly_episyr",
+          9
+        ],
+        [
+          "beetle",
+          6
+        ]
+      ]
+    },
+    {
+      "label": "fly",
+      "support": 277,
+      "correct": 181,
+      "recall": 0.6534296028880866,
+      "predicted_count": 355,
+      "top_confusions": [
+        [
+          "fly_small",
+          79
+        ],
+        [
+          "bee",
+          7
+        ],
+        [
+          "hfly_eupeo",
+          6
+        ]
+      ]
+    },
+    {
+      "label": "fly_sarco",
+      "support": 61,
+      "correct": 0,
+      "recall": 0.0,
+      "predicted_count": 0,
+      "top_confusions": [
+        [
+          "fly",
+          48
+        ],
+        [
+          "fly_small",
+          10
+        ],
+        [
+          "hfly_eupeo",
+          2
+        ]
+      ]
+    },
+    {
+      "label": "fly_small",
+      "support": 229,
+      "correct": 119,
+      "recall": 0.519650655021834,
+      "predicted_count": 341,
+      "top_confusions": [
+        [
+          "fly",
+          47
+        ],
+        [
+          "hfly_episyr",
+          42
+        ],
+        [
+          "bee",
+          10
+        ]
+      ]
+    },
+    {
+      "label": "hfly_episyr",
+      "support": 451,
+      "correct": 398,
+      "recall": 0.8824833702882483,
+      "predicted_count": 678,
+      "top_confusions": [
+        [
+          "hfly_eupeo",
+          21
+        ],
+        [
+          "fly_small",
+          13
+        ],
+        [
+          "bee",
+          6
+        ]
+      ]
+    },
+    {
+      "label": "hfly_eupeo",
+      "support": 246,
+      "correct": 41,
+      "recall": 0.16666666666666666,
+      "predicted_count": 105,
+      "top_confusions": [
+        [
+          "hfly_episyr",
+          127
+        ],
+        [
+          "fly_small",
+          24
+        ],
+        [
+          "bee",
+          23
+        ]
+      ]
+    },
+    {
+      "label": "hfly_sphaero",
+      "support": 68,
+      "correct": 9,
+      "recall": 0.1323529411764706,
+      "predicted_count": 20,
+      "top_confusions": [
+        [
+          "hfly_episyr",
+          56
+        ],
+        [
+          "fly_small",
+          2
+        ],
+        [
+          "beetle",
+          1
+        ]
+      ]
+    }
+  ]
+}

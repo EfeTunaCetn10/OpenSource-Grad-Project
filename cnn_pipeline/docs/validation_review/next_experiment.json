@@ -1,0 +1,30 @@
+{
+  "status": "planned_not_run",
+  "single_change": "class-weighted CrossEntropyLoss",
+  "weight_rule": "N_train / (num_classes * class_train_count)",
+  "weights": {
+    "bee": 1.1056060606060607,
+    "beetle": 2.0325905292479107,
+    "beetle_cocci": 1.4005758157389636,
+    "bug": 2.3238853503184713,
+    "fly": 0.5956734693877551,
+    "fly_sarco": 3.301809954751131,
+    "fly_small": 0.6323223570190641,
+    "hfly_episyr": 0.41202710333145115,
+    "hfly_eupeo": 0.8953374233128835,
+    "hfly_sphaero": 2.8392996108949418
+  },
+  "fixed": [
+    "dataset split",
+    "seed 42",
+    "32x32 RGB LeNet architecture",
+    "augmentation",
+    "30 epochs",
+    "AdamW and scheduler settings",
+    "batch size 128"
+  ],
+  "evaluation": "validation accuracy, macro recall and per-class recall; no test evaluation",
+  "checkpoint_selection": "validation accuracy, unchanged from baseline; also report validation macro recall",
+  "baseline_validation_accuracy": 0.5090191657271702,
+  "baseline_validation_macro_recall": 0.3471535761732434
+}
