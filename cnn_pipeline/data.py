@@ -91,6 +91,13 @@ def build_mnist_loaders(
     )
 
 
+def build_insect_eval_transform(mean: Sequence[float], std: Sequence[float]) -> transforms.Compose:
+    """Shared deterministic preprocessing for evaluation and train-only calibration."""
+    return transforms.Compose(
+        [transforms.Resize((32, 32)), transforms.ToTensor(), transforms.Normalize(mean, std)]
+    )
+
+
 def build_insect_loaders(
     data_dir: Path,
     stats_path: Path,
@@ -116,9 +123,7 @@ def build_insect_loaders(
             transforms.Normalize(mean, std),
         ]
     )
-    eval_transform = transforms.Compose(
-        [transforms.Resize((32, 32)), transforms.ToTensor(), transforms.Normalize(mean, std)]
-    )
+    eval_transform = build_insect_eval_transform(mean, std)
 
     train = datasets.ImageFolder(data_dir / "train", transform=train_transform)
     val = datasets.ImageFolder(data_dir / "val", transform=eval_transform)
