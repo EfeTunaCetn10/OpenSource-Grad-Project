@@ -414,6 +414,11 @@ Her katman için tablo tutulmalıdır:
 
 ### 6.5 Register Map
 
+> [!success] Bu bölüm karara bağlandı — [[ADR-015 Register Map ve Parametre Yükleme]]
+> Aşağıdaki liste artık yalnız *hangi* register'ların bulunacağını özetliyor. Offset, bit
+> alanı, reset değeri, W1C davranışı ve **shadow + commit yükleme protokolü** ADR-015'te
+> bağlayıcı olarak tanımlı.
+
 Örnek register'lar:
 
 | Register | İçerik |
@@ -447,6 +452,11 @@ Her bit için belirtilmesi gerekenler:
 | Accuracy hedefi | Tüm test dataset'i | `T_ML_ACC_001` |
 | Reset recovery | Mid-frame reset | `T_RST_001` |
 | Güvenli CDC | `report_cdc` | `T_CDC_001` |
+| Requantizer bit-exact (pre-clamp `y_raw`) | Tie vector + golden karşılaştırma | `T_NUM_REQ_001` |
+| Requantizer valid/ready + latency | SVA + random backpressure | `T_REQ_TIMING_001` |
+| Parametre yükleme atomikliği | Eksik/geçersiz commit senaryoları | `T_REG_PARAM_001` |
+| Byte lane ve `$readmemh` sırası | Bilinen desenli frame | `T_AXI_LANE_001` |
+| Accumulator wrap ve taşma bayrağı | `2^31` sınırına oturtulmuş vektörler | `T_NUM_OVF_001` |
 
 Her gereksinimin en az bir testi, her testin de en az bir gereksinimi olmalıdır.
 
@@ -1166,6 +1176,15 @@ Performans, kaynak, doğrulama ve entegrasyon etkileri nelerdir?
 - [ ] `ADR-013`: **Skip connection / residual toplama desteği** — ResNet ailesi bir ağ
   seçilirse datapath'e (conv → bias → requant → ReLU → pool) tensör toplama eklenmeli.
   En geç Aşama 2 sonunda netleşmeli
+- [~] `ADR-014`: Requantizer port ve zamanlama sözleşmesi →
+  [[ADR-014 Requantizer Port ve Zamanlama Sözleşmesi]] — sabit `LAT`, skid buffer, `k_last`
+  kapısı, `out_y_raw`. **Önerildi, Kişi B onayı bekliyor**, 2026-09-25
+- [~] `ADR-015`: Register map ve parametre yükleme protokolü →
+  [[ADR-015 Register Map ve Parametre Yükleme]] — shadow + commit, `ERR_CFG_M0` zorunlu,
+  `PARAM_SRC` mux. **Önerildi, Kişi B onayı bekliyor**, 2026-09-25
+- [~] `ADR-016`: Aktivasyon tensör düzeni ve byte yerleşimi →
+  [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi]] — HWC, little-endian lane haritası,
+  kanal dolgusu, çıkış payload'ı. **Önerildi, Kişi B onayı bekliyor**, 2026-09-25
 
 ---
 

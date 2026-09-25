@@ -44,6 +44,17 @@ ReLU ayrı bir aşama değil, saturasyonun alt sınır parametresidir — bu, Ro
 `wrap32` addition associative olduğundan integer golden model MAC'leri array ile aynı sırada
 toplamak zorunda değildir. Overflow oluşursa da sonuç modulo `2^32` aynı kalır.
 
+> [!warning] `n = 0` yasal olduğu için config guard'ı `M0`'a düşüyor
+> Bu ADR'nin önceki taslağında `n` aralığı `[1,49]` ile sınırlıydı ve `SHIFT` register'ının
+> reset değeri `0` "parametresiz cihaz başlayamaz" garantisini bedava veriyordu. `n = 0` artık
+> aritmetik olarak tanımlı ve yasal olduğundan bu garanti **kayboldu**: reset sonrası
+> `M0 = 0, n = 0, bias = 0` ile cihaz sessizce `y = 0` üretir — hata değil, yanlış cevap.
+> Guard bu yüzden **`M0 ∈ [2^16, 2^17)`** kontrolüne taşındı; `M0 = 0` bu aralığı ihlal ettiği
+> için yapılandırılmamış cihaz yakalanır. Zorunlu commit-time kontrolü ve `ERR_CFG_M0` biti
+> için bkz. [[ADR-015 Register Map ve Parametre Yükleme]].
+> `n ∉ [1,49]` kontrolü korrektlik için **gerekli değildir** (tüm `n` tanımlı), yalnızca
+> export-bug kanaryası olarak opsiyoneldir: `n ≥ 33` pratikte `M < 1,1e-5` demektir.
+
 ## Gerekçe
 
 ### Neden 64-bit requant hesap yolu
@@ -98,7 +109,9 @@ Kişi A'ya *fazladan* iş ve doğruluk kaybı demek. Donanım maliyeti 8 girişl
 Verilog'da bir ifadedeki **herhangi** bir operand unsigned ise ifadenin tamamı unsigned olur ve
 `>>>` mantıksal kaydırmaya döner — negatif acc'de sonuç çöp çıkar. Yani **Python varsayılan
 olarak doğru, Verilog varsayılan olarak yanlış.** Bu asimetri tam olarak bu yüzden madde:
-requant yolundaki tüm sinyaller `signed`, M0 ise MSB'si daima 0 olan signed register'da.
+requant yolundaki tüm **aritmetik** sinyaller `signed`, M0 ise MSB'si daima 0 olan signed
+register'da. **İstisna:** shift count `n` unsigned'dır (Verilog shift miktarını zaten daima
+unsigned yorumlar) — karar tablosundaki satırla uyumlu.
 
 ### 2. DSP sayısı — 1 değil 2
 DSP48E1'in çarpanı 25×18 signed. Requant çarpımı 32-bit acc × 18-bit M0 olduğu için tek slice'a
@@ -173,6 +186,47 @@ maskelenir. `T_NUM_REQ_001`, RTL'in **pre-clamp
 `y_raw`** değerini de Python reference ile karşılaştırır; yalnız final INT8 output'u
 karşılaştırmak rounding kuralını doğrulamaz. `n=0` için tie yoktur. `n=31` gibi geniş
 shift'lerde `INT32` dışına çıkan tie vector'ler elenir.
+
+### Ölçülen tie kapsamı ve iki zorunlu test kuralı
+
+Üretecin ayırt etme gücü `n`'e sert biçimde bağlı. 10 farklı `(n, M0)` çiftinde ölçüldü
+(`M0` tek sayı, normalize aralıktan rastgele):
+
+| `n` | tie sayısı | half-up ≠ nearest-even (**pre-clamp `y_raw`**) | half-up ≠ nearest-even (**final INT8**) |
+|---:|---:|---:|---:|
+| 1 | 101 | 50 | **0** |
+| 8 | 101 | 51 | **0** |
+| 16 | 101 | 50 | **0** |
+| 24 | 101 | 51 | **0** |
+| 31 | 2 | 1 | **0** |
+| 32 | 1 | 1 | **0** |
+| 33–63 | 0 | 0 | 0 |
+
+Son sütun on vakanın **onunda da sıfır**: yalnız final INT8'i karşılaştıran bir test yanlış
+rounding kuralıyla da geçerdi. Sebebi ardışık tie'lar arasında `Δy_raw = M0 ≥ 2^16` olması —
+101 tie'ın en fazla biri INT8 aralığına düşer. Bu, `pre-clamp y_raw` karşılaştırmasının
+tercih değil **zorunluluk** olduğunun ölçülmüş kanıtıdır.
+
+**Kural 1 — boş tie listesi sessizce geçmemeli.** `n ≥ 33`'te tie'lar `2^n` aralıklı,
+INT32 penceresi `2^32` geniş; `2^n > 2^32` olunca pencereye hiç temsilci düşmez. Üreteç boş
+liste döndürür ve test "geçer".
+
+```python
+assert ties or n > 32, f"n={n}: tie üretilemedi, rounding kuralı doğrulanmıyor"
+```
+
+**Kural 2 — `n` süpürülmeli, tek değerde koşulmamalı.** Önerilen set:
+`n ∈ {0, 1, 16, 20, 24, 27, 31, 32}` — pratik bandı ve iki uç davranışı (`n=0` tie yok,
+`n=32` tek tie) birlikte kapsar.
+
+> [!note] `n ≥ 33` kör noktası erişilemez, kapsama kaybı yok
+> `M = M0·2^-n` olduğundan `n = 33`, `M ≈ 1,1e-5` demektir. Gerçek bir katmanda
+> `M ≈ 0,001–0,05`, yani `n ≈ 20–27` — tablonun en güçlü satırları. Kör nokta ulaşılabilir
+> `M` bandının tamamen dışında; bu not, sonradan keşfedilip kapsama açığı sanılmasın diye
+> yazıldı.
+
+**RTL sonucu:** test `y_raw`'ı görmek zorunda olduğundan requantizer modülü bunu port olarak
+dışarı vermeli — bkz. [[ADR-014 Requantizer Port ve Zamanlama Sözleşmesi]] `out_y_raw`.
 
 Bu test **bu hafta** yazılabilir: Kişi A `requant_ref()`'i, Kişi B RTL modülünü yazar, cocotb
 ikisini birleştirir. Array henüz yokken sözleşmenin en zor maddesini kanıtlar.
