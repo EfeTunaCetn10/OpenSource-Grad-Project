@@ -36,7 +36,7 @@
 |---|---|---|
 | **Kişi A** | "Training a Classifier" (CIFAR-10) tutorial'ını tamamla | PyTorch resmi tutorial (docs.pytorch.org/tutorials) |
 | **Kişi B** | HDLBits devam + fixed-point/INT8 aritmetiği + DSP48 mimarisi | DSP48E1 Slice User Guide, Xilinx **UG479** |
-| **Ortak — KRİTİK KARAR ✅** | **Fixed-point format kontratı KİLİTLENDİ (28 Ağu):** simetrik INT8, per-output-channel ağırlık ölçeği, INT32 acc, requant `(acc·M0 + 2^(n-1)) >>> n`, round-half-up. Tam metin: [[ADR-003 INT8 Fixed-Point Formatı]] | PyTorch Quantization docs, "Quantization Basics" bölümü |
+| **Ortak — KRİTİK KARAR ✅** | **Fixed-point format kontratı KİLİTLENDİ (28 Ağu; 25 Eyl update):** simetrik INT8, per-output-channel weight scale, INT32 wrap accumulator, signed 64-bit requant hesap yolu, round-half-up; INT8 saturation requant output'unda. Tam metin: [[ADR-003 INT8 Fixed-Point Formatı]] | PyTorch Quantization docs, "Quantization Basics" bölümü |
 
 ### Hafta 3 — 19-25 Ağustos
 | | Görev | Must Kaynak |

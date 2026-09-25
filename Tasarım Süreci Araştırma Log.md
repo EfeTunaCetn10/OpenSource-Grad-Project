@@ -132,7 +132,7 @@ seviyedeki (mimari sözleşme seviyesinde) karşılığı.
   olması kararıyla (bkz. §1.2) zaten örtüşüyor.
 - **Modül sınırlarında veri register'la** — pipeline'lanabilirlik ve timing için. Bizim
   [[ADR-003 INT8 Fixed-Point Formatı|ADR-003]]'ün "requant yolundaki tüm sinyaller signed,
-  ara çarpım 50-bit" maddesi zaten pipeline register'ları gerektirecek kadar derin bir yol —
+  requant hesap yolu signed 64-bit" maddesi zaten pipeline register'ları gerektirecek kadar derin bir yol —
   bu register'ların modül sınırında (requantizer girişi/çıkışı) olması timing için önemli,
   ADR-003'te bu netleştirilmemiş, RTL yazarken eklenmeli.
 - **Reset stratejisi:** UG949 hem senkron hem asenkron reset örnekleri veriyor, "HDL'de reset'i
@@ -281,7 +281,7 @@ güncellenmesi gerekiyor — bu bir eksiklik değil, henüz sırası gelmemiş b
    functional coverage grubu (örn. requant'ın tie/sınır/normal durumlarını kapsayan) kurup şu an
    elle yazılan vektör listesinin (ADR-003) coverage açısından da yeterli olduğunu doğrula.
 5. **Modül sınırlarında register'lama kararını şimdi ver, sonradan ekleme** (§2.2) — özellikle
-   50-bit ara çarpımın (ADR-003) requantizer içinde nerede pipeline edileceği ilk yazımda
+   64-bit requant hesap yolunun (ADR-003, 2026-09-25 update) nerede pipeline edileceği ilk yazımda
    netleşmeli, timing kapanmayınca RTL'e geri dönmek UG949'un tam da kaçınmamızı söylediği şey.
 6. **8 banka/8 requantizer gibi tekrarlayan yapılarda tek ortak reset/enable kullan** (§2.2) —
    control set israfını baştan önle.

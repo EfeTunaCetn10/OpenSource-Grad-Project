@@ -5,6 +5,11 @@ from __future__ import annotations
 import random
 
 
+def wrap_int32(value: int) -> int:
+    """Signed interpretation of an INT32 accumulator's modulo-2**32 sum."""
+    return ((value + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+
+
 def systolic_tile(a: list[list[int]], b: list[list[int]], rows: int, cols: int, k_len: int):
     a_pipe = [[0] * cols for _ in range(rows)]
     b_pipe = [[0] * cols for _ in range(rows)]
@@ -43,7 +48,7 @@ def systolic_tile(a: list[list[int]], b: list[list[int]], rows: int, cols: int, 
                 next_av[row][col] = av_in
                 next_bv[row][col] = bv_in
                 if av_in and bv_in:
-                    acc[row][col] += a_in * b_in
+                    acc[row][col] = wrap_int32(acc[row][col] + a_in * b_in)
                     mac_count += 1
 
         a_pipe, b_pipe = next_a, next_b
@@ -54,12 +59,15 @@ def systolic_tile(a: list[list[int]], b: list[list[int]], rows: int, cols: int, 
 
 def golden(a: list[list[int]], b: list[list[int]], rows: int, cols: int, k_len: int):
     return [
-        [sum(a[row][k] * b[k][col] for k in range(k_len)) for col in range(cols)]
+        [wrap_int32(sum(a[row][k] * b[k][col] for k in range(k_len))) for col in range(cols)]
         for row in range(rows)
     ]
 
 
 def main() -> None:
+    assert wrap_int32((1 << 31) - 1 + 1) == -(1 << 31)
+    assert wrap_int32(-(1 << 31) - 1) == (1 << 31) - 1
+    assert wrap_int32((1 << 31) - 1 + 2 * 16384) == -(1 << 31) + 32767
     rng = random.Random(0x8A64)
     cases = [(8, 8, 8), (3, 5, 7), (1, 1, 1), (8, 2, 5)]
     for case_index, (rows, cols, k_len) in enumerate(cases, start=1):

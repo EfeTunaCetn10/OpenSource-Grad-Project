@@ -69,6 +69,8 @@ module pe_os #(
 
             if (clear_acc)
                 acc_reg <= '0;
+            // Fixed-width addition wraps modulo 2**ACC_WIDTH. Saturation is
+            // applied only after requantization, never in the MAC reduction.
             else if (mac_fire)
                 acc_reg <= acc_reg + product_ext;
         end

@@ -183,9 +183,9 @@ Bu model ağ mimarisinin ve doğruluk hedefinin referansıdır.
 Tercih edilen başlangıç formatı:
 
 - Ağırlık: signed INT8
-- Aktivasyon: signed veya unsigned INT8 — açıkça seçilmeli
+- Aktivasyon: signed INT8, simetrik
 - Bias: INT32
-- Accumulator: INT32
+- Accumulator: signed INT32, MAC + bias için wrap modulo `2^32`
 - Katman başına scale
 - Açık rounding ve saturation davranışı
 
@@ -206,14 +206,14 @@ Bu model RTL'nin gerçek matematiğini bire bir uygulamalıdır:
 - Accumulator genişliği
 - Arithmetic shift
 - Rounding yöntemi
-- Saturation veya wrap-around
+- Accumulator'da wrap modulo `2^32`; saturation yalnız requant output'unda
 - Zero-point ve scale
 - Bias, ReLU ve pooling işlem sırası
 
 Örnek matematik:
 
 $$
-acc = \sum_i x_i w_i + bias
+acc = \operatorname{wrap32}\!\left(\sum_i x_i w_i + bias\right)
 $$
 
 $$
@@ -254,7 +254,7 @@ Tam LeNet RTL'si bir anda geliştirilmemelidir.
 
 - [ ] Parametrik signed multiplier
 - [ ] Geniş accumulator
-- [ ] Saturating adder
+- [ ] INT32 wrapping accumulator
 - [ ] Arithmetic shifter
 - [ ] Rounding birimi
 - [ ] Requantizer
@@ -381,15 +381,15 @@ Her katman için tablo tutulmalıdır:
 | Input | INT8 signed, simetrik (z=0), per-tensor ölçek |
 | Weight | INT8 signed, simetrik (z=0), **per-output-channel** ölçek |
 | Product | INT16 signed (exact) |
-| Accumulator | INT32 signed |
+| Accumulator | INT32 signed; MAC + bias 32-bit wrap, accumulator saturation yok |
 | Bias | INT32 signed, acc domain'inde, per-channel |
 | M0 (çarpan) | `[2^16, 2^17)`, **signed register'da** tutulur |
-| n (kaydırma) | unsigned 6-bit, per-channel |
-| Ara çarpım | signed 50-bit |
-| Requantization | `y_raw = (acc·M0 + (1 << (n-1))) >>> n` |
+| n (shift) | unsigned 6-bit (`0..63`), per-channel |
+| Requant hesap yolu | signed 64-bit product + rounding offset + arithmetic shift |
+| Requantization | `half_ulp = (n == 0 ? 0 : 2^(n-1))`; `y_raw = (acc·M0 + half_ulp) >>> n` |
 | Rounding | **round-half-up** (nearest-even DEĞİL) |
 | Saturation + ReLU | `clamp(lo, 127)`, `lo = 0` (ReLU'lu) / `-128` (ReLU'suz) |
-| Signedness | Requant yolundaki **tüm** Verilog sinyalleri `signed` |
+| Signedness | Arithmetic operands ve intermediates `signed`; shift count `n` unsigned |
 
 > [!warning] Verilog tuzağı
 > Bir ifadedeki herhangi bir operand unsigned ise ifadenin tamamı unsigned olur ve `>>>`

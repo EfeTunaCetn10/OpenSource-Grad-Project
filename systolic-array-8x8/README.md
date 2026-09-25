@@ -2,7 +2,8 @@
 
 Bu paket, PYNQ-Z2 / XC7Z020 hedefi için temiz-kaynak yazılmış, 64 PE'li parametrik bir
 SystemVerilog başlangıç tasarımıdır. Varsayılan sayısal kontrat signed INT8 aktivasyon, signed INT8
-ağırlık ve signed INT32 accumulator'dır.
+ağırlık ve signed INT32 wrapping accumulator'dır. Requantizer'ın product + rounding
+offset + arithmetic shift yolu signed 64-bit; INT8 saturation yalnız output'tadır.
 
 ## İçerik
 
