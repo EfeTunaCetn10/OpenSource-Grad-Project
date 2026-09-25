@@ -9,8 +9,10 @@ uyarlanması. Proje özeti için bkz. [`Abstract.md`](./Abstract.md).
 ## İçerik
 
 - **`Abstract.md`** — proje özeti, motivasyon, aşamalı yol haritası
-- **`Roadmap.md`** — 16 haftalık teknik uygulama planı
-- **`Proje KararlarıV2.0.md`** — tasarım sözleşmeleri çerçevesi, ADR listesi
+- **`Roadmap.md`** — 16 haftalık teknik uygulama planı, tasarım sözleşmeleri çerçevesi (ICD,
+  numerik spec, clock/reset, verification plan) ve ADR listesi
+- **`Proje Kararları.md`** — Aşama 1 için Kişi A/Kişi B haftalık görev planı, kilitlenen
+  kontratların haftalık özeti
 - **`ADR-*.md`** — mimari karar kayıtları (Architecture Decision Records), her biri gerekçe
   ve elenen alternatifleriyle:
   - `ADR-001` Board ve araç sürümü

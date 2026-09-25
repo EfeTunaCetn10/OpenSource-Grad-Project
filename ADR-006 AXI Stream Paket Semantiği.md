@@ -14,7 +14,7 @@ Kabul edildi — 2026-08-28
 
 ## Bağlam
 Görüntü/aktivasyon verisinin PS↔PL arasında AXI4-Stream ile taşınmasında `TDATA` genişliği,
-`TLAST`, `TUSER`, `TKEEP` anlamlarının netleşmesi gerekiyor ([[Proje KararlarıV2.0|Roadmap]]
+`TLAST`, `TUSER`, `TKEEP` anlamlarının netleşmesi gerekiyor ([[Roadmap]]
 §6.2 ICD). Ağırlık yolu bu kararın kapsamı dışında — ağırlıklar DMA ile değil, önceden BRAM'e
 yükleniyor ([[ADR-011 Ağırlık Bellek Adresleme|ADR-011]]). [[ADR-007 DMA Modu|ADR-007]] ile
 birlikte ele alınıyor.

@@ -11,9 +11,16 @@ ağırlık ve signed INT32 accumulator'dır.
 - `rtl/systolic_tile_engine.sv`: Tile yakalama, row/column skew, clear/run/capture kontrolü ve
   partial-tile maskesi.
 - `rtl/systolic_array_8x8.sv`: 64 PE'li sabit isimli Vivado synthesis top.
+- `rtl/requantizer.sv`: ADR-003 INT32→INT8 requantizer (çarpım/yuvarlama/kaydırma/clamp yolu).
+  Henüz array'e bağlanmadı, `filelist.f`'e dahil değil — bilerek: T_NUM_REQ_001 onu tek başına
+  sınıyor.
 - `tb/tb_pe_os.sv`: PE signed-boundary, stall, bubble, clear ve flush testleri.
 - `tb/tb_systolic_array_8x8.sv`: Tam 8×8, signed sınır ve partial-tile self-checking testleri.
+- `tb/cocotb/test_requantizer.py`: `T_NUM_REQ_001` — requantizer'ı `model/requant_ref.py`'ye
+  karşı tie/sınır/rastgele vektörlerle bit-exact sınayan cocotb testi (ADR-009 Katman 1).
 - `model/verify_architecture.py`: Bağımsız cycle model ve golden matrix multiplication kontrolü.
+- `model/requant_ref.py`: ADR-003 requantization golden modeli + tie/sınır/rastgele vektör
+  üreticileri; `python model/requant_ref.py` kendi kendini doğrulayan bir kontrol de çalıştırır.
 - `vivado/check_synth.tcl`: XC7Z020 out-of-context synthesis; 64 DSP48 kullanımını zorunlu kılar.
 - `tasarim-ve-repo-incelemesi.md`: Kararlar, repo karşılaştırması ve blok diyagramları.
 
@@ -49,6 +56,14 @@ iverilog -g2012 -s tb_systolic_array_8x8 -o array_test.vvp `
   rtl\pe_os.sv rtl\systolic_array_os.sv rtl\systolic_tile_engine.sv `
   rtl\systolic_array_8x8.sv tb\tb_systolic_array_8x8.sv
 vvp array_test.vvp
+```
+
+`T_NUM_REQ_001` — requantizer bit-exact testi (cocotb + Icarus, ADR-009 Katman 1). Bu makinede
+ne cocotb ne Icarus kurulu (bkz. Threads.md), o yüzden bu komut henüz burada çalıştırılmadı:
+
+```powershell
+cd tb\cocotb
+make
 ```
 
 Vivado OOC synthesis:

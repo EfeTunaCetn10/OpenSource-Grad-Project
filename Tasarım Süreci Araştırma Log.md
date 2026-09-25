@@ -8,10 +8,7 @@ tags: [dnn-accelerator, research, methodology, verification, block-design]
 
 # Tasarım Süreci Araştırma Log
 
-RTL yazımına resmen başlamadan önce dört alanda yapılan araştırmanın çıktısı: referans repo'lardaki
-block design bağlantı desenleri, sektör-standardı RTL tasarım metodolojisi, doğrulama/kontrol
-edilebilirlik pratiği, ve test aşaması değerlendirmesi. Her bulgu somut bir kaynağa bağlı ve mümkün
-olduğunda ilgili ADR'ye çapraz referans veriyor.
+RTL yazımına resmen başlamadan önce dört alanda yapılan araştırmanın çıktısı: referans repo'lardaki block design bağlantı desenleri, sektör-standardı RTL tasarım metodolojisi, doğrulama/kontrol edilebilirlik pratiği, ve test aşaması değerlendirmesi. Her bulgu somut bir kaynağa bağlı ve mümkün olduğunda ilgili ADR'ye çapraz referans veriyor.
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: ADR-005 Direct Convolution
 created: 2026-08-28
-modified: 2026-08-28
+modified: 2026-09-25
 type: decision
 status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl, convolution]
@@ -20,14 +20,16 @@ zaten doğrudan convolution varsayımı üzerine yazıldı — bu ADR o varsayı
 
 ## Karar
 **Doğrudan (streaming) convolution: line buffer + sliding-window generator.** Görüntü hiçbir
-zaman `im2col` matrisi olarak DDR'ye açılmayacak.
+zaman `im2col` matrisi olarak DDR'ye açılmayacak. Aşama 1'deki kernel geometry
+[[ADR-002 CNN Topolojisi ve Dataset|ADR-002]] uyarınca 5×5'tir; window generator `kH`/`kW`
+parametreli tutulacak, kernel boyutu RTL içinde sabit bir 5×5 implementation'a gömülmeyecektir.
 
 Systolic array yine de **önce bağımsız GEMM olarak** doğrulanacak (Roadmap §5) — bu bir
 mimari çelişki değil, doğrulama sırası: array'in matris çarpımı doğruluğu kanıtlandıktan
 sonra window generator ile beslenir.
 
 ## Gerekçe
-- `im2col`, girdiyi kernel boyutu katına (LeNet 3×3 için ~9×) şişirir ve bu şişmiş matrisi
+- `im2col`, girdiyi kernel boyutu katına (Aşama 1'in 5×5 kernel'i için ~25×) şişirir ve bu şişmiş matrisi
   DDR'ye yazıp geri okumak gerekir. [[ADR-007 DMA Modu|ADR-007]]'nin analizinde görüldüğü gibi
   bu sistemdeki asıl darboğaz zaten veri transferi — im2col tam olarak o darboğazı büyütür.
 - `Kaynaklar/IJCDS-110136-1570680228.pdf` (Huynh, aynı board) line buffer + mul-add tree ile
@@ -44,6 +46,8 @@ sonra window generator ile beslenir.
 
 ## Sonuçlar
 - Window generator + line buffer, Kişi B'nin yazması gereken kritik bileşen (Roadmap §5 Aşama 3).
+  Aşama 1'in 5×5 geometry'si dört önceki row için line buffer gerektirir; `kH`/`kW` parametreli
+  tasarım sayesinde 3×3 veya RFF için `1×3` geometry yeniden kullanılabilir.
 - Padding ve stride desteği bu modülün sorumluluğunda.
 - RFF'ye (Aşama 3) 1D conv ile gidilirse line buffer `kH=1` özel durumuna indirgenir —
   yani kaydırma yazmacına dönüşür, yeniden tasarım gerekmez. Bkz. [[Kontrat Değerlendirmesi]].

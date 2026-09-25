@@ -6,7 +6,7 @@ type: decision
 status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl, ml]
 ---
-cloc
+
 # ADR-011: Ağırlık Bellek Düzeni / Adresleme Şeması
 
 ## Durum
@@ -16,7 +16,7 @@ Kabul edildi — 2026-08-28
 Abstract §5'te ve Proje Kararları'nda tanımlanan üç kritik kontrattan üçüncüsü: Kişi A'nın
 (ML) PyTorch'tan export ettiği quantize ağırlıkların, Kişi B'nin (RTL) BRAM okuma/adresleme
 şemasıyla birebir örtüşmesi. [[ADR-004 Systolic Array Boyutu|ADR-004]] (8×8, output-stationary)
-ve [[Proje KararlarıV2.0|Roadmap]] §5'teki doğrudan/streaming convolution (im2col değil)
+ve [[Roadmap]] §5'teki doğrudan/streaming convolution (im2col değil)
 kararlarının üzerine inşa ediliyor. Ağırlık depolama yeri zaten MVP kapsamında BRAM/ROM'a
 önceden yükleme olarak belirlenmişti (ADR-010); bu karar onu teyit edip üstüne adresleme
 şemasını ekliyor.
