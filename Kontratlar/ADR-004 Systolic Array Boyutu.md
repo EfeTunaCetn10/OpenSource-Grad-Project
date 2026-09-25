@@ -6,7 +6,7 @@ type: decision
 status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl]
 ---
-RFF
+
 # ADR-004: Systolic Array Boyutu
 
 ## Durum
@@ -34,7 +34,7 @@ Systolic array **8×8 (64 PE)** olarak sabitlendi — 64 DSP48E1 kullanımı, 22
 - Zynq-7020 sınıfında yayınlanmış iki gerçek akademik CNN accelerator, %16 ve %57 DSP
   kullanıyor — 8×8 (%29) bu aralığın ortasında, geniş marj bırakıyor.
 - Literatür (Eyeriss, Zynq-7020 örnekleri) bu ölçekte darboğazın DSP değil **LUT/routing**
-  olduğunu tutarlı biçimde gösteriyor — [[Proje KararlarıV2.0.0|Roadmap]] §19'un en büyük
+  olduğunu tutarlı biçimde gösteriyor — [[Roadmap]] §19'un en büyük
   riski olan timing closure'a karşı tampon sağlıyor.
 - TPU'nun 256×256'sı datacenter ölçeği, Gemmini'nin 16×16 önerisi zaten DSP tavanını aşıyor —
   ikisi de bu projeye doğrudan taşınamaz.
