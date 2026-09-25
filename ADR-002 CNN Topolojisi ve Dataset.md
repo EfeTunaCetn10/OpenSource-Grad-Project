@@ -42,6 +42,26 @@ derin (Abstract §2).
 | FC2 | 84 | — |
 | FC3 | 10 | class logits |
 
+### Derived tile count — 8×8 array
+
+Bu tablo kararın bağımsız bir hyperparameter'ı değil, yukarıdaki layer geometry ile 8×8
+array'den türetilmiş planlama hesabıdır. Matrix mapping'de `M=output channel`,
+`N=output position` (FC'de batch), `K=reduction length` alınır:
+
+| Layer | `M×N×K` | Output tile | `K` chunk (`K_MAX=8`) | Micro-run (`M×N×K`) |
+|---|---:|---:|---:|---:|
+| Conv1 | `6×784×75` | `1×98 = 98` | 10 | 980 |
+| Conv2 | `16×100×150` | `2×13 = 26` | 19 | 494 |
+| FC1 | `120×1×400` | `15×1 = 15` | 50 | 750 |
+| FC2 | `84×1×120` | `11×1 = 11` | 15 | 165 |
+| FC3 | `10×1×84` | `2×1 = 2` | 11 | 22 |
+
+Buradaki `FC1 = 15 tile`, yalnızca `ceil(120/8)` output-channel tile sayısıdır. Mevcut
+RTL'nin `K_MAX=8` tile-engine sınırıyla `K=400` ayrıca 50 K chunk'a bölünür ve partial
+sonuçların accumulation edilmesi gerekir. Önerilen K-streaming tasarımında bu 50 ayrı
+`start` yerine tek output tile boyunca 400 cycle K akışı yapılır; o durumda hardware
+output-tile invocation sayısı 15 olarak kalır.
+
 Bu tablo Aşama 1'in **reference model** kontratıdır. Aşama 3'te RFF için kernel veya layer
 geometry değişirse yeni model/export parametreleriyle yeniden değerlendirilir; RTL'nin
 window generator'ı `kH`/`kW` parametrelerini hard-code etmemelidir.
