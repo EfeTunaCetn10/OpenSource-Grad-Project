@@ -134,6 +134,54 @@ Zynq-7020 BRAM bütçesi 140 × 36 Kb = **630 KB**. Ara tampon %2,5. Ağırlıkl
 [[ADR-011 Ağırlık Bellek Adresleme|ADR-011]] "BRAM bütçesinde sorun yok" diyordu; sayı
 bu, ve FC1 tek başına ağırlık belleğinin %78'i.
 
+## Ölçüm — 2026-09-26, implementasyon sonrası
+
+`compute_engine` yazıldıktan sonra iki farklı verim rakamı ortaya çıktı ve **ikisi de doğru
+ama farklı şeyi ölçüyor.** Karıştırılmaması için ikisi de burada:
+
+**1. Engine'in kendi verimliliği (tek tam 8×8 tile, `K=400`):** 400 besleme + 14 skew/flush +
+8 drain + 1 setup = **423 cycle**, yani 400 üretken cycle'a karşılık 23 cycle overhead →
+**%96,6 MAC-slot kullanımı.** Bu, streaming engine'in neredeyse hiç overhead'i olmadığını
+söylüyor ve tasarımın kalitesini ölçüyor.
+
+**2. Ağ seviyesi verim (tüm LeNet-5, ilk ilkelerden hesap):**
+
+| Katman | `M×N×K` | Tile | Cycle/tile | Toplam cycle | Faydalı MAC | Verim |
+|---|---|---:|---:|---:|---:|---:|
+| Conv1 | `6×784×75` | 98 | 96 | 9.408 | 352.800 | %58,6 |
+| Conv2 | `16×100×150` | 26 | 173 | 4.498 | 240.000 | %83,4 |
+| FC1 | `120×1×400` | 15 | 409 | 6.135 | 48.000 | **%12,2** |
+| FC2 | `84×1×120` | 11 | 129 | 1.419 | 10.080 | **%11,1** |
+| FC3 | `10×1×84` | 2 | 93 | 186 | 840 | **%7,1** |
+| **Toplam** | | **152** | | **21.646** | **651.720** | **%47,0** |
+
+Cycle/tile = `K + (rows-1) + (cols-1) + cols_drain + 1`.
+
+**Frame süresi: 21.646 cycle = 216 µs @ 100 MHz.**
+
+Bu, bu ADR'nin yukarıda chunk'lama karşısında öne sürdüğü **%48** rakamını bağımsız olarak
+doğruluyor. İkinci rakamın birincisinden düşük olmasının sebebi engine değil, FC'de
+`N = 1` olması — 64 PE'nin 8'i çalışıyor.
+
+> **Rakamları karıştırma:** %96,6 "engine tam tile'da ne kadar verimli", %47,0 "bu ağ bu
+> engine'de donanımın ne kadarını kullanıyor". Biri tasarım kalitesi, diğeri iş yükü uyumu.
+
+**FC'nin gerçek maliyeti sayıyla:** FC1+FC2+FC3 = 7.740 cycle, yani **zamanın %35,8'i**, ve
+karşılığında toplam MAC'in yalnız **%9,0'ı**. Aşağıdaki K-split maddesinin iş gerekçesi tam
+olarak bu satır.
+
+### Bir yan bulgu — MAC accumulation'da INT32 wrap pratikte imkânsız
+
+`compute_engine`'in wrap testi `K = 131.073` gerektirdi. Sebebi aritmetik: INT8×INT8 çarpımın
+maksimum büyüklüğü `128 × 128 = 16.384`, dolayısıyla `K` uzunluğunda indirgeme en fazla
+`K × 16.384` büyüklüğe çıkar. `2^31 - 1` sınırını aşmak için `K > 131.071` gerekiyor —
+gerçek ağın en büyük `K` değeri **400**.
+
+Yani [[ADR-003 INT8 Fixed-Point Formatı|ADR-003]]'ün wrap kaygısı MAC indirgemesinden değil
+**bias toplamasından** doğuyor; `|bias_q| + K·16384 ≤ 2^31-1` yeter koşulunun bağlayıcı olan
+yarısı `bias_q` tarafı. Accumulator wrap'i Aşama 1'de erişilemez bir durum — ama testi
+silmeye gerek yok, `K_MAX` parametrik olduğu için doğrulama-amaçlı büyük `K` ile koşuyor.
+
 ## Bilinen verimsizlik — FC'de kolon ekseni ölü, Aşama 2'ye park
 
 `batch = 1` olduğu için FC katmanlarında `N = 1`: 8 kolondan biri çalışır, 64 PE'nin 8'i
