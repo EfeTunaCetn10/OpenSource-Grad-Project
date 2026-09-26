@@ -107,6 +107,29 @@ def ascii_guard() -> None:
         )
 
 
+def ensure_vectors() -> None:
+    """Regenerate the $readmemh vectors if they are missing.
+
+    They are deterministic (seeded) and 4 MB, so they are gitignored rather
+    than committed -- which means a fresh clone has none and every requant
+    test would fail on a missing file instead of a real defect.
+    """
+    gen = PROJECT / "model" / "gen_requant_vectors.py"
+    vec_dir = PROJECT / "sim" / "vectors"
+    if not gen.exists():
+        return
+    if vec_dir.is_dir() and any(vec_dir.glob("*.mem")):
+        return
+    print("[vectors] generating requant test vectors")
+    proc = subprocess.run(
+        [sys.executable, str(gen)], cwd=str(PROJECT), capture_output=True, text=True
+    )
+    if proc.returncode != 0:
+        raise SystemExit(
+            f"Vector generation failed:\n{proc.stdout}\n{proc.stderr}"
+        )
+
+
 def sources() -> list[Path]:
     rtl = sorted(RTL_DIR.glob("*.sv"))
     tb = sorted(TB_DIR.glob("*.sv"))
@@ -157,6 +180,7 @@ def main() -> int:
         return 2
 
     bin_dir = find_vivado_bin()
+    ensure_vectors()
     BUILD.mkdir(parents=True, exist_ok=True)
 
     srcs = sources()

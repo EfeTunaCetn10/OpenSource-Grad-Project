@@ -185,6 +185,38 @@ Madde düşüyor, taşma tespiti tek yerde (PE accumulator'ı + requantizer S0 b
 geliyor: drain yalnız tamamlanmış indirgemeden sonra olduğu için **her drain beat'i
 `k_last`'tır.**
 
+### 4. `out_sat` bypass'ta 0'dır
+
+İlk taslakta bypass'ta da clamp'in `out_sat`'a yansıması söylenmişti. Bir blok aşağıya
+bakınca yanlış olduğu görüldü: [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]]
+§4'ün STATUS beat'inde `sat_seen` biti var ve bypass'ı kullanan **tek** katman son katman.
+Orada `raw = a` tam bir INT32 logit, yani `|a| > 127` neredeyse her zaman doğru — `out_sat`
+her son-katman örneğinde yanar ve `sat_seen` her frame'de 1'e kilitlenip **hiçbir bilgi
+taşımaz.**
+
+> **Bypass örneğinde `out_sat = 0`.** Saturation quantization'ın bir özelliğidir; bypass'ta
+> quantization olmadığı için bayrak tanımı gereği yanlıştır, doğru değil.
+
+`out_y` yine `clamp(lo,127,a)` taşır (debug için tanımlı ve X olmayan kalır) ve `out_ovf`
+bypass'ta da bias toplamı taşmasını bildirir — o bayrak anlamlı kalıyor.
+
+### 5. `in_last && !in_k_last` yasak giriştir
+
+Madde 2 düşürülen örneğin el sıkışmasını tanımladı ama o örneğin `in_last`'ına ne olduğunu
+söylemedi. Düşürülürse **frame sınırı sessizce kaybolur**: AXIS wrapper TLAST görmez, DMA
+transferi hiç bitmez ve arıza sebepten çok uzakta bir hang olarak yüzeye çıkar.
+
+Çözüm bayrağı ileri taşımak **değil**, girişi yasaklamak:
+
+> `in_valid && in_last` → `in_k_last` zorunlu. Aksi kombinasyon concurrent assertion ile
+> yakalanır ve mesajı bunu bir birim hatası değil **yukarı akış yasak girişi** olarak
+> adlandırır.
+
+Gerekçe: `in_last` tile/frame sınırı demek, sınır da tanımı gereği tamamlanmış bir
+indirgemedir. [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]]'in drain yapısı bunu
+zaten garanti ediyor. Bayrağı veri yolunda ileri taşımak yasak girişi sessizce
+yaşanabilir kılardı — kapatılmak istenen sessiz hata sınıfı tam olarak böyle içeri girmişti.
+
 ### Drain şekli — neden kolon kolon, 8 lane
 
 ADR-018 tile'ı 8 çıkış lane'i (satır = çıktı kanalı) hâlinde, cycle başına bir kolon olarak
