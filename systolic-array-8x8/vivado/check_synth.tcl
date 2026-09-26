@@ -8,9 +8,13 @@ read_verilog -sv [file join $design_dir rtl systolic_array_os.sv]
 read_verilog -sv [file join $design_dir rtl compute_engine.sv]
 read_verilog -sv [file join $design_dir rtl systolic_array_8x8.sv]
 
-# The timing constraint must exist before synthesis so the optimizer and DSP
-# inference see the real 100 MHz requirement.
-create_clock -name clk -period 10.000 [get_ports clk]
+# The 100 MHz constraint must be in force *during* synthesis so the optimizer
+# and DSP inference see the real requirement. It is read from an XDC rather
+# than called inline: create_clock before synth_design fails ("No open
+# design" -- get_ports has no elaborated netlist to query), and after
+# synth_design it is too late to constrain synthesis at all. Only read_xdc
+# gets both the parse order and the timing semantics right.
+read_xdc [file join $script_dir constraints.xdc]
 
 synth_design -mode out_of_context -flatten_hierarchy rebuilt \
     -top systolic_array_8x8 -part xc7z020clg400-1
