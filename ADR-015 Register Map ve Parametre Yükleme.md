@@ -134,3 +134,80 @@ bu ölçüm bir kez yapılmalı.
   → red + `ERR_CFG_M0`, aktif parametre değişmedi (okuyarak doğrula); `BUSY` iken commit → red;
   geçerli commit → 8 bankanın da yeni değerle çalıştığı uçtan uca.
 - PS sürücüsü commit dönüşünü kontrol etmeden `START` yazmamalı.
+
+## Ek madde — 2026-09-26: implementasyon sırasında kapatılan beş boşluk
+
+`rtl/axi_lite_regs.sv` yazılıp `T_REG_PARAM_001` XSim'de geçerken (5/5) beş madde tanımsız
+çıktı. Offsetler ve shadow/commit protokolü olduğu gibi uygulandı; aşağıdakiler eklendi.
+
+### 1. `LAYER_CFG` alan yerleşimi — tanımsızdı, kilitlendi
+
+Bu ADR `LAYER_CFG`'yi "c_in, kH, kW, stride, pad, out_H, out_W" diye **isimlendiriyordu ama
+bit konumu vermiyordu**, bu yüzden implementasyon onu ham 32-bit RW olarak bıraktı. Layer
+sequencer bunu decode edecek, PS sürücüsü paketleyecek — tanımsız kalırsa iki taraf farklı
+yerleştirir ve arıza "ağ çalışıyor ama çıktı saçma" olarak görünür.
+
+```
+0x010 LAYER_CFG  RW
+  [ 8: 0] c_in     9 bit, max 511   (conv1=3, conv2=6, FC1=400)
+  [11: 9] kH       3 bit, max 7     (5×5 → 5)
+  [14:12] kW       3 bit, max 7
+  [16:15] stride   2 bit            (1 veya 2)
+  [18:17] pad      2 bit            (Aşama 1'de 0 — valid convolution)
+  [24:19] out_H    6 bit, max 63    (28/14/10/5/1)
+  [30:25] out_W    6 bit, max 63
+  [31]    RSVD     RAZ/WI
+```
+
+`c_in` 9 bit olmak zorunda çünkü FC1 `1×1` conv olarak `c_in = 400` ile ifade ediliyor
+(`K = c_in·kH·kW`). Toplam 31 bit, bir bit yedek.
+
+**Büyüme sınırı:** `out_H`/`out_W` 6 bit, yani 63. Aşama 3'te 64×64 girdi + `5×5` valid
+convolution `out = 60` verir, sınıra sığar. Daha büyüğü gerekirse `0x018` (şu an boş)
+`LAYER_CFG1` olur — offset tablosunda 0x014'ten 0x040'a boşluk bilerek duruyor.
+
+> RTL'de kalan tek iş bit 31'i RAZ/WI maskelemek; alanlar zaten saklanıyor. Decode WP8
+> (layer sequencer) ile gelecek.
+
+### 2. `STATUS[4] = TABLE_VALID` eklendi
+
+Bu ADR'nin `STATUS` tanımı [0:3] bitlerini kullanıyordu. `PARAM_SRC = 1` (BRAM'den tablo)
+yolunun kendi başlangıç guard'ı olması gerektiği için bit 4 tanımlandı:
+
+```
+0x008 STATUS  RO  [0] IDLE [1] BUSY [2] DONE (W1C) [3] ERROR
+                  [4] TABLE_VALID        ← yeni
+```
+
+`START` reddi artık `PARAM_SRC`'ye göre doğru kaynağı sorguluyor:
+`PARAM_SRC ? !TABLE_VALID : !COMMITTED` → `ERR_PARAM_INCOMPLETE`.
+
+**Neden gerekli:** `COMMITTED` yalnız *register* yolunun yüklendiğini kanıtlar, tablo yolu
+hakkında hiçbir şey söylemez. Tablo seçili ve tablo yokken `START` kabul edilirse cihaz sıfır
+parametre setiyle çalışır — aritmetik olarak geçerli, her aktivasyon için sessizce `y = 0`.
+Bu, `ERR_CFG_M0`'ın kapattığı hata şeklinin **ikinci örneği**; register map hâlâ tanımlanırken
+kapatıldı. Reset **güvenli** kaynağı seçer: `PARAM_SRC = 0`.
+
+### 3. W1C yarış kuralı: donanım kazanır
+
+Bir `W1C` biti aynı cycle'da donanım tarafından set edilip yazılım tarafından temizlenirse:
+**yazılımın temizlemesi uygulanır, sonra donanım olayı geri OR'lanır** — olay kaybolmaz. Ters
+sıralama bir hata bayrağını sessizce yutardı; bu register dosyasının varlık sebebi hataları
+görünür kılmak olduğu için kabul edilemez.
+
+### 4. `VERSION` değerleri ve `SOFT_RESET` yan etkisi
+
+`VERSION = { rtl_ver 16'h0001, regmap_ver 16'h0001 }`. Map her değiştiğinde `regmap_ver`
+artacak — PS sürücüsü uyuşmazlığı böyle yakalar.
+
+`CONTROL.SOFT_RESET` bir `counter_clear` darbesi üretir; `CYCLE_COUNT`, `STALL_IN`,
+`STALL_OUT`, `FRAME_COUNT` bu darbede sıfırlanır. Sayaçlar datapath'e ait olduğu için temizleme
+register dosyasında değil orada yaşıyor.
+
+### 5. `n ∈ [1,49]` bilinçli olarak zorlanmadı
+
+Bu ADR o kontrolü "opsiyonel kanarya" diye işaretliyordu ve
+[[ADR-003 INT8 Fixed-Point Formatı|ADR-003]] `n = 0`'ı yasallaştırdı — zorlamak ADR-003 ile
+çelişirdi. `ERR_CFG_SHIFT` biti map'te duruyor ama set edilmiyor; export-bug kanaryası olarak
+ileride bağlanabilir. **Yapılandırılmamış cihaz guard'ı `ERR_CFG_M0`'dır**, bu ADR'nin zaten
+söylediği gibi.
