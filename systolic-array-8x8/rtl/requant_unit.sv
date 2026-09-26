@@ -96,10 +96,6 @@ module requant_unit #(
     logic accept;
     logic pipe_ce;
 
-    // Verification-only controls/counter for the illegal-boundary assertion.
-    // They do not participate in the datapath or handshake logic.
-    logic tb_expect_illegal_last;
-    integer illegal_last_assertions;
 
     // The next result queue is represented as skid0, skid1, and S2 in
     // output order. S2 is kept as the direct, no-stall output so the normal
@@ -372,21 +368,22 @@ module requant_unit #(
             (in_valid && in_last) |-> in_k_last;
     endproperty
 
-    // The expected-fire hook is used only by the directed timing test. In
-    // normal operation this remains a real assertion failure with a message
-    // that identifies the illegal upstream input, not a unit datapath bug.
-    assert property (p_last_requires_k_last)
-        else begin
-            illegal_last_assertions = illegal_last_assertions + 1;
-            if (tb_expect_illegal_last)
-                $display("EXPECTED_ASSERTION: illegal upstream input; in_last requires in_k_last");
-            else
-                $error("Illegal upstream input: in_valid && in_last requires in_k_last");
-        end
+    // A frame boundary is by definition a completed reduction, so this
+    // combination cannot arise from a correct upstream engine. The message
+    // names it as an illegal input rather than a datapath bug, because that
+    // is where the fix belongs.
+    //
+    // The assertion is labelled so a testbench that deliberately drives the
+    // violation can bracket it with $assertoff/$asserton on this label. It
+    // deliberately keeps no expected-failure counter and no testbench-visible
+    // flag: ADR-014 rejected hierarchical testbench access into this module
+    // for exactly this reason -- such hooks break silently when the module is
+    // reorganised, and a DUT carrying verification state is a DUT that can
+    // behave differently under test than in the field.
+    a_last_requires_k_last: assert property (p_last_requires_k_last)
+        else $error("Illegal upstream input: in_valid && in_last requires in_k_last");
 
     initial begin
-        tb_expect_illegal_last = 1'b0;
-        illegal_last_assertions = 0;
         if (ACC_W < 2)
             $error("ACC_W must be at least 2");
         if (M0_W < 2)

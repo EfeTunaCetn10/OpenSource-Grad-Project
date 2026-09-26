@@ -184,11 +184,19 @@ module tb_requant_unit_timing;
         rst_n = 1'b1;
         reset_phase = 0;
 
-        // Directed illegal-input case. The assertion must fire, but this
-        // intentional violation is marked as expected so the regression stays
-        // green and proves the checker, rather than merely compiling it.
+        // Directed illegal-input case: in_last on a sample that is not the end
+        // of a K reduction. The DUT's a_last_requires_k_last assertion owns
+        // reporting it, so it is switched off for exactly this window rather
+        // than being counted through a hook inside the DUT -- ADR-014 rejects
+        // hierarchical testbench state in the module under test.
+        //
+        // What is checked here is therefore the behaviour, not the assertion:
+        // the sample must be consumed (in_ready stays high, so the upstream
+        // reducer cannot deadlock) and must produce no output beat at all --
+        // in particular no out_last, which is the failure that would otherwise
+        // strand a DMA transfer waiting for a TLAST that never arrives.
+        $assertoff(0, dut.a_last_requires_k_last);
         @(negedge clk);
-        dut.tb_expect_illegal_last = 1'b1;
         out_ready = 1'b1;
         cfg_bias_q = 0;
         cfg_m0 = 18'sd98765;
@@ -199,17 +207,27 @@ module tb_requant_unit_timing;
         in_valid = 1'b1;
         in_k_last = 1'b0;
         in_last = 1'b1;
-        @(posedge clk);
-        #1;
-        if (dut.illegal_last_assertions != 1) begin
-            $display("FAIL tb_requant_unit_timing: illegal upstream assertion did not fire");
+        if (!in_ready) begin
+            $display("FAIL tb_requant_unit_timing: illegal sample was not accepted (deadlock risk)");
             errors = errors + 1;
         end
+        @(posedge clk);
         @(negedge clk);
         in_valid = 1'b0;
         in_k_last = 1'b0;
         in_last = 1'b0;
-        dut.tb_expect_illegal_last = 1'b0;
+        // LAT cycles is the window in which a wrongly-propagated in_last would
+        // surface. Nothing may come out.
+        repeat (LAT + 2) begin
+            @(posedge clk);
+            #1;
+            if (out_valid) begin
+                $display("FAIL tb_requant_unit_timing: dropped sample produced an output (out_last=%b)",
+                         out_last);
+                errors = errors + 1;
+            end
+        end
+        $asserton(0, dut.a_last_requires_k_last);
 
         // Randomized stream. The first burst is intentionally full-rate with
         // no stalls; later windows include long stalls, one-cycle gaps, and
