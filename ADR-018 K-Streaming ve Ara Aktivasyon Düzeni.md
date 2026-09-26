@@ -195,6 +195,46 @@ alınmıyor** — doğruluk önce, ve engine'in `active_cols` yolu bu modu sonra
 > [!warning] Bu, ertelenirse RTL'i baştan yazdıran türde bir madde değil — `active_cols`
 > parametrik kaldığı sürece eklenebilir. Ama parametrik kalmazsa yazdırır.
 
+## Ek madde — 2026-09-26: window generator bağlanınca çıkan üç madde
+
+`line_buffer.sv` + `window_gen.sv` yazılıp `compute_engine`'e bağlandığında (ilk gerçek
+convolution, golden ile doğrulandı, 6/6) üç şey ortaya çıktı.
+
+### 1. `k` sırası ölçüldü — ADR-011'in vaadi bedava ayakta
+
+Aktivasyonlar HWC saklandığı için `k`'nin **spatial-major** (`ci` en hızlı,
+`k = (kh·kW + kw)·c_in + ci`) sıralanması bellekte daha doğal görünüyordu; bu sıra seçilseydi
+[[ADR-011 Ağırlık Bellek Adresleme|ADR-011]]'in "conv ağırlıklarında permütasyon yok" vaadi
+düşer ve [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]] §5'in FC1 bulgusunun
+conv kopyası doğardı.
+
+**Ölçüldü: spatial-major hiçbir kazanç vermiyor** — 0 byte, 0 BRAM portu, 0 stream cycle.
+Yalnızca adres sıralamasını değiştiriyor. Dolayısıyla ADR-011'in kanal-major sırası
+(`k = ci·(kH·kW) + kh·kW + kw`) korunuyor ve **conv ağırlık export'u permütasyonsuz kalıyor.**
+Bu artık bir tercih değil, ölçülmüş bir sonuç.
+
+### 2. Kısmi son kolon grubu — sessiz hata sınıfı, kapatıldı
+
+`out_W` 8'in katı değil (conv1 = 28, conv2 = 10, pool çıkışları 14 ve 5), yani her çıktı
+satırının **son kolon grubu kısmi**. `active_cols` conv1'de `8/8/8/4`, conv2'de `8/2` olarak
+sürülmeli ve kullanılmayan lane'ler sıfır olmalı. Yanlış yapılırsa her çıktı satırının son
+birkaç pikseli çöp olur ve **çıktıya bakarak anlaşılmaz** — tensör doğru şekilde, doğru
+boyutta ve çoğu doğru değerle gelir. Kabul testine yazıldı.
+
+### 3. Açık kalan — generator ↔ engine metadata sözleşmesi (WP8'i bloke eder)
+
+Bu ADR ve ADR-016, window generator'ın **tile-start / row-group metadata**'sını ve
+`compute_engine` ile backpressure eşleşmesini tanımlamıyor. Şu an testbench bunları elle
+sürüyor; layer sequencer yazılırken kimin `start`'ı ürettiği, `active_cols`'un hangi cycle'da
+geçerli olduğu ve satır grubu sınırının nasıl bildirildiği sözleşme olmak zorunda.
+
+Ayrıca [[ADR-005 Direct Convolution|ADR-005]] padding desteğinden söz ediyor ama **sınır
+cycle sözleşmesini** tanımlamıyor. Aşama 1 valid convolution (`pad = 0`) olduğu için bu
+bloke etmiyor; `pad` parametresi RTL'de duruyor ama sıfırdan farklı değer için sınır
+davranışı yazılı değil.
+
+> Bu üç maddenin ilk ikisi kapandı, üçüncüsü **WP8'in önkoşulu.**
+
 ## Alternatifler
 
 - **K-chunking + harici partial-sum tamponu:** yukarıdaki tablo. Elendi.
