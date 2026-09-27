@@ -67,3 +67,36 @@ korunuyor: sıfırdan başlayan iki kişilik ekipte UVM projenin ana hedefini g�
 - [cocotb Discussion #3661 — Vivado IP'lerinin simülatör desteği](https://github.com/cocotb/cocotb/discussions/3661)
 - [cocotb-vivado (üçüncü taraf, kısıtlı)](https://github.com/themperek/cocotb-vivado)
 - [AMD AXI Verification IP — PG267](https://docs.amd.com/r/en-US/pg267-axi-vip)
+
+## ⚠️ Ek madde — 2026-09-26: simülatör seçimi düşürüldü
+
+> [!warning] Bu ADR'nin **simülatör** kararı geçersiz.
+> Yerine [[ADR-017 Simülasyon ve Emülasyon Ortamı|ADR-017]] geçti. İki katmanlı ayrım ve
+> dosya köprüsü **aynen geçerli**; yalnız her iki katman da XSim'de koşuyor.
+
+Bu ADR'nin "Katman 1 = cocotb + Icarus Verilog" kararı **Vivado'nun bu makinede kurulu
+olmadığı varsayımına** dayanıyordu. Varsayım yanlıştı: 2026-09-26'da Vivado 2025.1'in kurulu
+ve çalışır olduğu doğrulandı (`xvlog`/`xelab`/`xsim`, `xc7z020` destekli;
+`processing_system7_vip`, `axi_vip`, `axi4stream_vip`, `axi_dma` diskte mevcut).
+
+**Bu ADR'nin kaydettiği çakışmanın sebebi böylece ortadan kalkıyor.** "cocotb XSim'i
+desteklemiyor, Icarus şifreli Xilinx IP'sini simüle edemiyor" ikilemi iki simülatör
+gerektirdiği için vardı; XSim üçünü de (saf RTL, SVA, şifreli IP) koşturduğundan tek
+simülatör yetiyor.
+
+Düşen maddeler:
+- "Katman 1 — cocotb + Icarus Verilog" → **XSim + SystemVerilog testbench**.
+- "CI'da yalnızca Katman 1 koşabilir (Icarus ücretsiz ve headless)" → XSim headless koşar ama
+  Vivado kurulumu ister, yani ücretsiz public CI'da koşmaz. **Burada CI, lokal regression
+  demek:** `systolic-array-8x8/sim/run_tests.py`, her commit öncesi.
+- `tb/cocotb/` (Makefile + `test_requantizer.py`) ölü yol. Vektör kapsamı SV testbench'e
+  taşındıktan sonra silinecek.
+
+Korunan ve asıl değerli madde **dosya tabanlı golden model köprüsü**: golden model
+simülatörün içinde canlı olmak zorunda değil, Python vektör üretir, RTL `$readmemh` ile okur,
+karşılaştırma dosya üzerinden yapılır. Tek simülatörde bu daha da doğal hâle geldi.
+
+**Ölçülen bedel:** `T_NUM_REQ_001` 2026-09-11'de yazıldı ve **15 gün hiç koşmadı**, çünkü
+cocotb ve Icarus kurulu değildi — oysa aynı testi koşturacak simülatör baştan beri
+makinedeydi. Araç kararlarında "kurulu mu?" sorusu "en iyisi hangisi?" sorusundan önce
+gelmeliydi.

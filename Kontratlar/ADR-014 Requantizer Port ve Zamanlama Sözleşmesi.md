@@ -140,3 +140,89 @@ out_valid && !out_ready |=> out_valid && $stable(out_y) && $stable(out_last)
 - `T_NUM_REQ_001` bu porta bağımlı; ADR-014 olmadan test yazılamaz.
 - Kişi B'nin Hafta 5-6 iş yüküne skid buffer ve `k_last` sayacı eklenir.
 - K-streaming seçilirse ADR-002'nin tile tablosundaki "micro-run" sütunu yeniden hesaplanır.
+
+## Ek madde — 2026-09-26: implementasyon sırasında kapatılan üç boşluk
+
+Bu ADR'nin port listesi uygulanırken üç madde tanımsız çıktı. Üçü de implementasyonu bloke
+ettiği için karara bağlandı; ADR hâlâ `önerildi` olduğundan bunlar da Kişi B onayına dahildir.
+
+### 1. `cfg_bypass` ne üretir
+
+ADR yalnız "son katman: acc'yi ham geçir" diyordu; hangi porttan, hangi genişlikte ve
+`out_y`'nin ne olacağı açıktı.
+
+> **Bypass'ta `out_y_raw`, bias eklenmiş INT32 accumulator `a`'yı `PROD_W`'ye sign-extend
+> edilmiş olarak taşır.** Çarpım/yuvarlama/kaydırma uygulanmaz. `out_y` yine
+> `clamp(lo,127,a)` taşır ve `out_sat` o clamp'i bildirir — port hiçbir zaman X kalmaz ama
+> downstream `out_y_raw[31:0]`'ı tüketir. `out_ovf` bias toplamı taşmasını normal yolda
+> olduğu gibi bildirir. **Gecikme bypass'ta da tam `LAT`'tır**: bypass bir mux, kısayol
+> değil — zamanlama iki yolda birebir aynı kalır.
+
+[[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]] §4'ün "son katman 10 × INT32
+logit döndürür" kararının donanım tarafı budur.
+
+### 2. `in_k_last = 0` olan örneğin el sıkışması
+
+ADR "`in_k_last=0` olan hiçbir örnek çıkış üretmez" assertion'ını veriyordu ama örneğin
+kabul mü edildiği, yoksa reddedildiği mi belirsizdi. İkisi farklı sonuç doğuruyor:
+
+> **Örnek el sıkışmasını normal şekilde tamamlar** (`in_ready` aynı davranır, örnek tüketilir)
+> ve **düşürülür**, çıkış beat'i üretmez. Üzerinde **asla stall edilmez.**
+
+Gerekçe: `in_k_last = 0` üzerinde stall etmek yukarı akıştaki indirgeyiciyi kilitler —
+indirgeyici `k_last`'ı ancak akışı ilerleterek üretebilir, requantizer akışı durdurursa
+ikisi birbirini bekler. Bu, kapatılmak istenen sessiz hata sınıfını bir deadlock'la
+değiştirmek olurdu.
+
+### 3. Dış partial-sum toplayıcısı maddesi düştü
+
+Bu ADR "[[ADR-003 INT8 Fixed-Point Formatı|ADR-003]]'ün wrap taşma tespiti dış partial-sum
+toplayıcısını da kapsamalıdır" diyordu. [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]]
+K-streaming'i kilitleyince **dış toplayıcı yok**: accumulator tüm `K` boyunca PE'de kalıyor.
+Madde düşüyor, taşma tespiti tek yerde (PE accumulator'ı + requantizer S0 bias toplamı) yaşıyor.
+
+`in_k_last` da böylece tek sayaç karşılaştırmasına iniyor ve ADR-018'in drain şemasından
+geliyor: drain yalnız tamamlanmış indirgemeden sonra olduğu için **her drain beat'i
+`k_last`'tır.**
+
+### 4. `out_sat` bypass'ta 0'dır
+
+İlk taslakta bypass'ta da clamp'in `out_sat`'a yansıması söylenmişti. Bir blok aşağıya
+bakınca yanlış olduğu görüldü: [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]]
+§4'ün STATUS beat'inde `sat_seen` biti var ve bypass'ı kullanan **tek** katman son katman.
+Orada `raw = a` tam bir INT32 logit, yani `|a| > 127` neredeyse her zaman doğru — `out_sat`
+her son-katman örneğinde yanar ve `sat_seen` her frame'de 1'e kilitlenip **hiçbir bilgi
+taşımaz.**
+
+> **Bypass örneğinde `out_sat = 0`.** Saturation quantization'ın bir özelliğidir; bypass'ta
+> quantization olmadığı için bayrak tanımı gereği yanlıştır, doğru değil.
+
+`out_y` yine `clamp(lo,127,a)` taşır (debug için tanımlı ve X olmayan kalır) ve `out_ovf`
+bypass'ta da bias toplamı taşmasını bildirir — o bayrak anlamlı kalıyor.
+
+### 5. `in_last && !in_k_last` yasak giriştir
+
+Madde 2 düşürülen örneğin el sıkışmasını tanımladı ama o örneğin `in_last`'ına ne olduğunu
+söylemedi. Düşürülürse **frame sınırı sessizce kaybolur**: AXIS wrapper TLAST görmez, DMA
+transferi hiç bitmez ve arıza sebepten çok uzakta bir hang olarak yüzeye çıkar.
+
+Çözüm bayrağı ileri taşımak **değil**, girişi yasaklamak:
+
+> `in_valid && in_last` → `in_k_last` zorunlu. Aksi kombinasyon concurrent assertion ile
+> yakalanır ve mesajı bunu bir birim hatası değil **yukarı akış yasak girişi** olarak
+> adlandırır.
+
+Gerekçe: `in_last` tile/frame sınırı demek, sınır da tanımı gereği tamamlanmış bir
+indirgemedir. [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]]'in drain yapısı bunu
+zaten garanti ediyor. Bayrağı veri yolunda ileri taşımak yasak girişi sessizce
+yaşanabilir kılardı — kapatılmak istenen sessiz hata sınıfı tam olarak böyle içeri girmişti.
+
+### Drain şekli — neden kolon kolon, 8 lane
+
+ADR-018 tile'ı 8 çıkış lane'i (satır = çıktı kanalı) hâlinde, cycle başına bir kolon olarak
+drain ediyor. Sebebi doğrudan bu ADR'nin config modeli: [[ADR-015 Register Map ve Parametre
+Yükleme|ADR-015]] parametreleri **çıktı kanalı** başına tanımlıyor (`bank = c_out mod 8`),
+dolayısıyla hep aynı kanalı taşıyan bir lane hep aynı `(M0, n, bias_q)` demetini taşır.
+Satır satır drain edilseydi config her cycle değişirdi — bu ADR'nin "config veriyle birlikte
+akar" kuralı çalışmaya devam ederdi ama 8 birimin hepsine her cycle yeni demet yazmak
+gerekirdi.
