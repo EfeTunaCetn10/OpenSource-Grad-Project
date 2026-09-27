@@ -1,7 +1,7 @@
 # Block Design'da Clock/Reset Bağlantıları — PE ve 8×8 Array
 
 Araştırma tarihi: 2026-09-11
-Hedef: PYNQ-Z2 (`xc7z020clg400-1`), Vivado 2024.1, tek clock domain FCLK0 @ 100 MHz — [[ADR-001 Board ve Araç Sürümü|ADR-001]], [[ADR-008 Clock Domain Stratejisi|ADR-008]]
+Hedef: PYNQ-Z2 (`xc7z020clg400-1`), Vivado 2025.1, tek clock domain FCLK0 @ 100 MHz — [[ADR-001 Board ve Araç Sürümü|ADR-001]], [[ADR-008 Clock Domain Stratejisi|ADR-008]]
 
 ## Kök neden: neden hata alınıyor
 

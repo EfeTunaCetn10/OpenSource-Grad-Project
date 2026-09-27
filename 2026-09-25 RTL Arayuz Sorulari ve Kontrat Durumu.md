@@ -25,7 +25,7 @@ Her cevap üç durumdan biriyle işaretli:
 
 | ADR | Konu | Durum |
 |---|---|---|
-| ADR-001 | PYNQ-Z2 `xc7z020clg400-1`, Vivado 2024.1 + PYNQ v3.1 | 🔒 |
+| ADR-001 | PYNQ-Z2 `xc7z020clg400-1`, Vivado 2025.1 (PYNQ image açık) | 🔒 |
 | ADR-002 | LeNet-5, 32×32 RGB, 5×5 valid conv, 2×2/2 max-pool, `3→6→16`, FC `400→120→84→10` | 🔒 |
 | ADR-003 | Simetrik INT8, per-output-channel ağırlık scale, **INT32 wrap accumulator**, **signed 64-bit requant yolu**, round-half-up | 🔒 (25 Eyl revizyonu) |
 | ADR-004 | 8×8 systolic array (64 PE), output-stationary | 🔒 |
