@@ -6,3 +6,9 @@ model/__pycache__/
 .Xil/
 .synthrun/
 reports/
+vivado/.project/
+vivado/*.jou
+vivado/*.log
+*.jou
+*.log
+dfx_runtime.txt
