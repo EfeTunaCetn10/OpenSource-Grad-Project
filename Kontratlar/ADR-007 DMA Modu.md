@@ -14,7 +14,7 @@ Kabul edildi — 2026-08-28
 
 ## Bağlam
 Görüntü/aktivasyon verisi PS↔PL arasında AXI DMA IP üzerinden taşınıyor
-([[Proje KararlarıV2.0|Roadmap]] §7.3). Board PYNQ-Z2, geliştirme akışı büyük olasılıkla
+([[Roadmap]] §7.3). Board PYNQ-Z2, geliştirme akışı büyük olasılıkla
 PYNQ Python overlay/driver framework'ü üzerinden ilerleyecek. [[ADR-006 AXI Stream Paket
 Semantiği|ADR-006]] ile birlikte ele alınıyor.
 

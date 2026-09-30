@@ -1,12 +1,12 @@
 ---
 title: ADR-011 Ağırlık Bellek Adresleme
 created: 2026-08-28
-modified: 2026-08-28
+modified: 2026-09-25
 type: decision
 status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl, ml]
 ---
-cloc
+
 # ADR-011: Ağırlık Bellek Düzeni / Adresleme Şeması
 
 ## Durum
@@ -16,7 +16,7 @@ Kabul edildi — 2026-08-28
 Abstract §5'te ve Proje Kararları'nda tanımlanan üç kritik kontrattan üçüncüsü: Kişi A'nın
 (ML) PyTorch'tan export ettiği quantize ağırlıkların, Kişi B'nin (RTL) BRAM okuma/adresleme
 şemasıyla birebir örtüşmesi. [[ADR-004 Systolic Array Boyutu|ADR-004]] (8×8, output-stationary)
-ve [[Proje KararlarıV2.0|Roadmap]] §5'teki doğrudan/streaming convolution (im2col değil)
+ve [[Roadmap]] §5'teki doğrudan/streaming convolution (im2col değil)
 kararlarının üzerine inşa ediliyor. Ağırlık depolama yeri zaten MVP kapsamında BRAM/ROM'a
 önceden yükleme olarak belirlenmişti (ADR-010); bu karar onu teyit edip üstüne adresleme
 şemasını ekliyor.
@@ -85,3 +85,25 @@ formatı, zaten kararlaştırılmış BRAM/ROM ön-yükleme (Roadmap §2) ile bi
   [NVDLA In-memory data formats](https://nvdla.org/hw/format.html),
   [NVDLA Unit Description](https://nvdla.org/hw/v1/ias/unit_description.html),
   [An Efficient CNN Accelerator for Low-Cost Edge Systems](https://dl.acm.org/doi/10.1145/3539224)
+
+## Ek madde — 2026-09-25: "dönüşümsüz export" FC1 için geçerli değil
+
+Bu ADR'nin "Hiçbir yeniden sıralama yok" maddesi **conv ağırlıkları için doğru**, FC1 için
+değil. Sebebi bu ADR'nin kapsamı dışında bir kararda: aktivasyonlar HWC saklanıyor
+([[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]]).
+
+Pool2 çıkışı bellekte `[h][w][c]` sırasında; PyTorch `torch.flatten` ise NCHW üzerinden
+`[c][h][w]` üretiyor. FC1'in `c_in` indeksi bu iki sıradan hangisine göre tanımlıysa ağırlık
+sütunları ona uymak zorunda. Çözüm donanımda değil, Kişi A'nın export script'inde tek satır:
+
+```python
+w_fc1 = w_fc1.reshape(120, 16, 5, 5).permute(0, 2, 3, 1).reshape(120, 400)
+```
+
+Conv katmanlarının export'u değişmiyor; `bank = c_out mod 8` ve `addr = t*K + k` şeması
+aynen geçerli. Bu madde yazılmazsa ağ çalışır ama doğruluk şans seviyesine düşer — donanımda
+hiçbir bayrak yanmadığı için Hafta 8'de teşhisi pahalı bir hata sınıfıdır.
+
+> Bu ek madde [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]]'nın HWC kararına
+> bağlıdır; o karar CHW lehine değişirse permütasyon gereksiz hâle gelir.
+

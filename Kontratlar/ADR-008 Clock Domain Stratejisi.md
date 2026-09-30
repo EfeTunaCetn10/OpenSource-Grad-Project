@@ -17,7 +17,7 @@ PL içindeki custom RTL'in (systolic array + PE'ler + AXI4-Lite/Stream wrapper +
 buffer/window generator) kaç clock domain'de çalışacağı kararı. PS-PL sınırı kapsam dışı —
 Xilinx'in önceden doğrulanmış AXI interconnect/clock-converter IP'leri o geçişi zaten
 kapsıyor. [[ADR-004 Systolic Array Boyutu|ADR-004]] (8×8 array, 64 DSP48E1) üzerine inşa
-ediliyor. [[Proje KararlarıV2.0|Roadmap]] §6.4/§8'deki CDC karar tablosu ve reset yaklaşımı
+ediliyor. [[Roadmap]] §6.4/§8'deki CDC karar tablosu ve reset yaklaşımı
 bu kararla birlikte geçerliliğini koruyor, yeniden yazılmıyor.
 
 ## Karar

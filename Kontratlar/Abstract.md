@@ -29,7 +29,7 @@ Sistemin merkezinde, systolic array mimarisiyle düzenlenmiş bir PE (Processing
 
 ## 3.2 Dataflow Stratejisi
 
-PE dizisi, **output-stationary** dataflow ile çalışacak şekilde tasarlanmaktadır: her PE, bir çıktı elemanının tüm MAC indirgemesini (K adet çarpma-toplama) yerel olarak biriktirir; kısmi toplam PE dışına çıkmaz. Bu seçim, weight-stationary alternatifine kıyasla PE'ler arası kısmi toplam (partial sum) arayüzü gerektirmediği için doğrulama karmaşıklığını azaltmakta ve projenin sınırlı zaman çizelgesinde fonksiyonel doğruluğa ulaşma riskini düşürmektedir. Bu karar, ekip içinde erken aşamada kilitlenen bir "kontrat noktası" niteliğindedir — ancak model tarafındaki referans hesaplamanın donanımla aynı **toplama sırasını** izlemesi gerekmez (tam sayı toplaması ilişkisel olduğundan ve seçilen 32-bit accumulator genişliği ara taşmayı engellediğinden sonuç sıradan bağımsızdır); asıl örtüşmesi gereken, her çıktı için kullanılan bias, yuvarlama ve saturation kuralının birebir aynı olmasıdır.
+PE dizisi, **output-stationary** dataflow ile çalışacak şekilde tasarlanmaktadır: her PE, bir çıktı elemanının tüm MAC reduction'ını (K adet MAC) yerel olarak biriktirir; partial sum PE dışına çıkmaz. Bu seçim, weight-stationary alternatifine kıyasla PE'ler arası partial sum arayüzü gerektirmediği için doğrulama karmaşıklığını azaltmakta ve projenin sınırlı zaman çizelgesinde fonksiyonel doğruluğa ulaşma riskini düşürmektedir. Bu karar, ekip içinde erken aşamada kilitlenen bir "kontrat noktası" niteliğindedir. INT32 accumulator ve bias addition modulo `2^32` wrap yapar; wrap addition associative olduğu için integer golden model aynı MAC sırasını izlemek zorunda değildir. Her output için bias, rounding ve INT8 saturation kuralı birebir aynı olmalıdır.
 
 ## 3.3 Sistem Entegrasyonu
 
@@ -38,7 +38,7 @@ PE dizisi, AXI4-Lite (kontrol/register erişimi) ve AXI4-Stream (veri akışı) 
 
 ## 3.4 Quantization
 
-Model, PyTorch'ta eğitildikten sonra post-training quantization (PTQ) ile INT8'e indirgenmekte; doğruluk kaybı kabul edilemez düzeydeyse quantization-aware training (QAT)'e geçilmesi planlanmaktadır. Sayısal format ekip içinde netleştirilen bir diğer kontrat noktasıdır ve kilitlenmiştir: ağırlık ve aktivasyonlar simetrik (zero-point = 0) signed INT8; ağırlık ölçeklemesi çıktı kanalı başına, aktivasyon ölçeklemesi tensör başına; accumulator ve bias signed INT32; requantization tamsayı çarpan ve sağa kaydırma ile (`(acc·M0 + 2^(n-1)) >>> n`), yuvarlama round-half-up. Bu son seçim, Python golden model ile Verilog RTL'in negatif sayılarda aynı kaydırma semantiğini paylaşması sayesinde ek dönüşüm kodu olmadan bit-exact eşleşme sağlamaktadır.
+Model, PyTorch'ta eğitildikten sonra post-training quantization (PTQ) ile INT8'e indirgenmekte; doğruluk kaybı kabul edilemez düzeydeyse quantization-aware training (QAT)'e geçilmesi planlanmaktadır. Sayısal format ekip içinde netleştirilen bir diğer kontrat noktasıdır ve kilitlenmiştir: ağırlık ve aktivasyonlar simetrik (zero-point = 0) signed INT8; ağırlık scale'i per-output-channel, aktivasyon scale'i per-tensor; accumulator ve bias signed INT32, MAC ve bias addition wrap modulo `2^32`; requantization signed 64-bit product + rounding offset + arithmetic shift ile yapılır (`half_ulp = n == 0 ? 0 : 2^(n-1)`, `y_raw = (acc·M0 + half_ulp) >>> n`). Rounding round-half-up, INT8 saturation requant output'undadır. Python golden model ve Verilog RTL aynı arithmetic shift kuralını paylaşır.
 
 ## 4. Aşamalı Hedef Çerçevesi (Gated Roadmap)
 

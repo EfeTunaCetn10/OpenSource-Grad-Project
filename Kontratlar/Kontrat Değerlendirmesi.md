@@ -80,8 +80,9 @@ kararlarını değil, Aşama 3 vaadini etkiliyor.
    Savunulabilir bir takas ama ADR-004'te açıkça yazılı değil.
 4. **Tarih tutarsızlığı hâlâ duruyor.** [[Abstract]] §4 tablosu Aşama 1 için "Ekim–Kasım 2026"
    diyor; gerçek kontrat: Aşama 1 en geç **Eylül sonu**, Aşama 2+3 en geç **Aralık sonu**.
-5. **Dosya adı karışıklığı.** `Roadmap.md` haftalık planı, `Proje KararlarıV2.0.md` ise
-   tasarım sözleşmeleri + ADR listesini taşıyor — adlar içerikle ters.
+5. ~~**Dosya adı karışıklığı.**~~ **Düzeltildi (2026-08-31):** dosyalar içerikle uyuşacak şekilde
+   yeniden adlandırıldı — haftalık plan artık `Proje Kararları.md`, tasarım sözleşmeleri + ADR
+   listesi artık `Roadmap.md`. ADR'lerdeki `[[...|Roadmap]]` linkleri de güncellendi.
 
 ## Paper değerlendirmeleri
 
