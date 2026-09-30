@@ -1,5 +1,5 @@
 """Valid CHW integer cross-correlation; stride=1, padding=0, dilation=1 only."""
-from integer_linear_ref import checked_int32
+from integer_linear_ref import wrap32
 
 
 def _shape_int8(value, rank: int, name: str) -> tuple[int, ...]:
@@ -25,7 +25,7 @@ def integer_conv2d_ref(x: list | tuple, weights: list | tuple, *,
     """Compute [out,H-kH+1,W-kW+1] Python int sums, without modifying inputs.
 
     Reduction order is ci, kh, kw; no kernel flip, im2col, bias or requantization.
-    INT32 partial/final overflow is rejected diagnostically, not modeled as RTL.
+    INT32 output wraps modulo 2^32, equivalent to wrapping every partial sum.
     """
     if type(layer) is not str or not layer:
         raise TypeError('layer must be a nonempty string')
@@ -46,10 +46,7 @@ def integer_conv2d_ref(x: list | tuple, weights: list | tuple, *,
                     for kh in range(kh_count):
                         for kw in range(kw_count):
                             total += x[ci][h + kh][w + kw] * weights[co][ci][kh][kw]
-                            checked_int32(total, name=(f'{layer} output[{co},{h},{w}] '
-                                                       f'partial ci={ci},kh={kh},kw={kw}'))
-                checked_int32(total, name=f'{layer} output[{co},{h},{w}] final sum')
-                row.append(total)
+                row.append(wrap32(total))
             plane.append(row)
         outputs.append(plane)
     return outputs

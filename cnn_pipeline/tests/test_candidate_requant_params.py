@@ -78,8 +78,8 @@ def test_intermediate_failures(sx, sy, sw):
         candidate_requant_params(sx, sy, [sw])
 
 
-@pytest.mark.parametrize('M0,n', [(65535, 17), (131072, 17), (65536, 0),
-                                 (65536, 50), (65536, 63), (True, 17)])
+@pytest.mark.parametrize('M0,n', [(65535, 17), (131072, 17), (65536, -1),
+                                 (65536, 64), (65536, 100), (True, 17)])
 def test_guard_against_invalid_selected_pair(monkeypatch, M0, n):
     monkeypatch.setattr(analysis, 'analyze_multiplier', lambda M: {
         'selected_candidate': {'M0': M0, 'n': n}})

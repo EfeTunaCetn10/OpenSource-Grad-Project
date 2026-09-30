@@ -1,3 +1,13 @@
+# 2026-09-30 kontrat senkronizasyonu
+
+Bias quantization aday rounding politikası değişmedi; INT32 dışındaki üretilen bias bir yapılandırma hatası olarak reddedilir. Runtime MAC+bias ise artık kilitli wrap32 kullanır. Pool/Flatten scale aktarımı kilitlidir.
+
+Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
+Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n reddi ve
+taşma-exception ifadeleri güncel API davranışını tanımlamaz.
+
+---
+
 # Aday bias quantization referansı
 
 `bias_quant_ref.py`, bağımsız `quantize_bias_candidate(bias, activation_scale,

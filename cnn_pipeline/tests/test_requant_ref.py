@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from requant_ref import checked_signed50, requant_raw, requant_ref
+from requant_ref import checked_signed64, requant_raw, requant_ref
 
 
 def nearest_ties_positive(product, denominator):
@@ -55,7 +55,7 @@ def test_T_NUM_REQ_001_saturation_and_half_step_neighbors(raw):
 
 @pytest.mark.parametrize('M0', [65536, 65537, 131070, 131071])
 def test_T_NUM_REQ_001_all_supported_shifts_and_int32_edges(M0):
-    for n in range(1, 50):
+    for n in range(64):
         for acc in [-(2**31), -1, 0, 1, 2**31 - 1]:
             expected = nearest_ties_positive(acc * M0, 2**n)
             assert requant_raw(acc, M0, n) == expected
@@ -69,10 +69,9 @@ def test_T_NUM_REQ_001_invalid_multiplier(M0):
         requant_ref(0, M0, 17)
 
 
-@pytest.mark.parametrize('acc', [-(2**31) - 1, 2**31])
-def test_T_NUM_REQ_001_invalid_accumulator(acc):
-    with pytest.raises(ValueError, match='INT32'):
-        requant_ref(acc, 65536, 17)
+@pytest.mark.parametrize('acc,wrapped', [(-(2**31)-1, 2**31-1), (2**31, -(2**31))])
+def test_T_NUM_REQ_001_accumulator_wrap(acc, wrapped):
+    assert requant_raw(acc, 65536, 16) == wrapped
 
 
 @pytest.mark.parametrize('n', [-1, 64])
@@ -81,31 +80,36 @@ def test_T_NUM_REQ_001_invalid_shift_field(n):
         requant_ref(0, 65536, n)
 
 
-def test_T_NUM_REQ_001_zero_shift_unresolved():
-    with pytest.raises(ValueError, match='n=0.*temporarily.*unresolved'):
-        requant_ref(0, 65536, 0)
+@pytest.mark.parametrize('acc', [-(2**31), -1, 0, 1, 2**31-1])
+@pytest.mark.parametrize('n', [0, 1, 49, 50, 63])
+def test_T_NUM_REQ_001_signed64_full_shift_domain(acc, n):
+    assert requant_raw(acc, 131071, n) == nearest_ties_positive(acc*131071, 2**n)
+    if n == 0:
+        assert requant_raw(acc, 131071, n) == acc*131071
 
 
-@pytest.mark.parametrize('n', range(50, 64))
-def test_T_NUM_REQ_001_rounding_operand_overflows_50_bits(n):
-    for acc in [-(2**31), -1, 0, 2**31 - 1]:
-        with pytest.raises(OverflowError, match=f'rounding constant for n={n}.*50-bit'):
-            requant_ref(acc, 131071, n)
-    # n=50, negative acc: sum could fit, but its positive rounding operand cannot.
+def test_T_NUM_REQ_001_signed64_guard():
+    lo, hi = -(2**63), 2**63-1
+    assert checked_signed64(lo) == lo and checked_signed64(hi) == hi
+    for value in (lo-1, hi+1):
+        with pytest.raises(OverflowError, match='64-bit'):
+            checked_signed64(value)
+    with pytest.raises(TypeError):
+        checked_signed64(True)
+    maximum = (2**31-1)*131071 + 2**62
+    assert checked_signed64(maximum) == maximum < hi
 
 
-def test_T_NUM_REQ_001_signed50_guard_and_reachable_sum_bound():
-    lo, hi = -(2**49), 2**49 - 1
-    assert checked_signed50(lo) == lo
-    assert checked_signed50(hi) == hi
-    for value in (lo - 1, hi + 1):
-        with pytest.raises(OverflowError, match='test sum.*50-bit'):
-            checked_signed50(value, name='test sum')
-    # No sum overflow is reachable after valid operands pass: positive maximum
-    # is (2^31-1)*(2^17-1) + 2^48 < 2^49, at n=49.
-    maximum_sum = (2**31 - 1) * (2**17 - 1) + 2**48
-    assert checked_signed50(maximum_sum) == maximum_sum
-    assert maximum_sum == 2**49 - 2**31 - 2**17 + 1
+@pytest.mark.parametrize('n', [1,16,20,24,27,31,32,33,50,63])
+def test_T_NUM_REQ_001_odd_multiplier_tie_coverage(n):
+    M0 = 65537
+    base = (2**(n-1)*pow(M0,-1,2**n)) % 2**n
+    ties = [base+j*2**n for j in range(-50,51) if -2**31 <= base+j*2**n < 2**31]
+    assert ties or n > 32
+    assert bool(ties) == (n <= 32)  # This statement is for odd M0 only.
+    for acc in ties:
+        assert (acc*M0) % 2**n == 2**(n-1)
+        assert requant_raw(acc,M0,n) == nearest_ties_positive(acc*M0,2**n)
 
 
 @pytest.mark.parametrize('args', [(True, 65536, 17), (1., 65536, 17),
@@ -121,9 +125,15 @@ def test_T_NUM_REQ_001_deterministic_random_valid_vectors():
     rng = random.Random(42)
     for _ in range(2000):
         acc = rng.randint(-(2**31), 2**31 - 1)
-        M0, n = rng.randint(65536, 131071), rng.randint(1, 49)
+        M0, n = rng.randint(65536, 131071), rng.randint(0, 63)
         raw = nearest_ties_positive(acc * M0, 2**n)
         assert requant_raw(acc, M0, n) == raw
         for relu in (False, True):
             expected = min(127, max(0 if relu else -128, raw))
             assert requant_ref(acc, M0, n, relu=relu) == expected
+
+
+def test_even_multiplier_can_have_ties_above_shift32():
+    # ADR odd-multiplier tie-generator coverage must not be generalized to even M0.
+    assert requant_raw(65536, 65536, 33) == 1
+    assert requant_raw(-65536, 65536, 33) == 0

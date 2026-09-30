@@ -30,7 +30,7 @@ def candidate_pair(M, n):
     """Nearest M0, half-up tie candidate; reject rather than clamp overflow."""
     M = positive(M)
     if type(n) is not int or not 1 <= n <= 49:
-        raise ValueError('Only temporary n=1..49 region supported; n=0/50..63 unresolved')
+        raise ValueError('Candidate search policy requires n=1..49; arithmetic supports n=0..63')
     scaled = math.ldexp(M, n)
     if not math.isfinite(scaled):
         raise ValueError('Non-finite scaled multiplier')

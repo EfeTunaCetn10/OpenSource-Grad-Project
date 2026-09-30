@@ -1,5 +1,5 @@
-"""Single-layer candidate software composition; no final RTL overflow policy."""
-from integer_linear_ref import integer_linear_ref, checked_int32
+"""Single-layer candidate software composition; locked INT32 wrap arithmetic."""
+from integer_linear_ref import integer_linear_ref, checked_int32, wrap32
 from integer_conv2d_ref import integer_conv2d_ref
 from requant_ref import requant_raw, requant_ref
 
@@ -30,7 +30,7 @@ def _parameters(weights, bias_q, M0, n, relu, layer):
 
 
 def _output(mac, bias, multiplier, shift, relu, location):
-    acc = checked_int32(mac + bias, name=f'{location} MAC+bias')
+    acc = wrap32(mac + bias)
     return requant_ref(acc, multiplier, shift, relu=relu)
 
 
@@ -39,7 +39,7 @@ def integer_linear_layer_ref(x, weights, bias_q, M0, n, *, relu):
 
     Parameters are ready channel-ordered Python integer lists/tuples. Invalid
     parameters are rejected before MAC. No scale selection or input mutation.
-    Return [C_out] Python ints; any overflow rejects the entire call.
+    Return [C_out] Python ints; MAC and bias additions wrap modulo 2^32.
     """
     _parameters(weights, bias_q, M0, n, relu, 'linear')
     mac = integer_linear_ref(x, weights)
@@ -51,7 +51,7 @@ def integer_conv2d_layer_ref(x, weights, bias_q, M0, n, *, relu, layer='conv2d')
     """Candidate software composition returning CHW Python ints.
 
     Reuses valid stride=1/padding=0/dilation=1 cross-correlation. No bias/scale
-    generation. INT32 overflow rejection is diagnostic, not final RTL policy.
+    generation. INT32 MAC and bias addition follow locked wrap semantics.
     """
     _parameters(weights, bias_q, M0, n, relu, layer)
     mac = integer_conv2d_ref(x, weights, layer=layer)

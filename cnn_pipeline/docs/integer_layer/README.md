@@ -1,3 +1,13 @@
+# 2026-09-30 kontrat senkronizasyonu
+
+MAC ve MAC+bias INT32 wrap kullanır; taşma exception testleri wrap beklentileriyle değişti. Parametre/bias temsil hataları hâlâ reddedilir. Requant n=0…63 kabul eder; INT8 clamp korunur.
+
+Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
+Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n reddi ve
+taşma-exception ifadeleri güncel API davranışını tanımlamaz.
+
+---
+
 # Tek katman candidate software composition
 
 `integer_layer_ref.py` iki bağımsız fonksiyon sunar:

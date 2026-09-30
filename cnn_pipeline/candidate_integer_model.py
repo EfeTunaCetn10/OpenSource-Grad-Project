@@ -1,5 +1,7 @@
 """In-memory candidate software parameters for LeNet; no forward or export."""
 from copy import deepcopy
+from math import prod
+from accumulator_safety import require_accumulator_safety
 from pathlib import Path
 
 import torch
@@ -60,7 +62,8 @@ def prepare_candidate_integer_model(qparams, model_state, weights_int8):
                         'bias_q': bias.tolist(), 'M0': params['M0'], 'n': params['n'],
                         's_x': sx, 's_y': sy, 's_w': list(sw),
                         'relu': isinstance(output_module, torch.nn.ReLU),
-                        'weights_list': wi.tolist(), 'requant_diagnostic': params}
+                        'weights_list': wi.tolist(), 'requant_diagnostic': params,
+                        'accumulator_safety': require_accumulator_safety(bias.tolist(), prod(shape[1:]), layer=name)}
     return {'role': 'candidate software parameters; not hardware export',
             'channel_count': 236, 'layers': layers}
 

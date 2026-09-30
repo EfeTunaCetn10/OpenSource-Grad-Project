@@ -48,23 +48,25 @@ def test_ties_and_saturation(conv, bias, expected):
 
 @pytest.mark.parametrize('conv', [False, True])
 @pytest.mark.parametrize('x,bias', [(1, 2**31-1), (-1, -2**31)])
-def test_mac_plus_bias_overflow(conv, x, bias):
+def test_mac_plus_bias_wrap(conv, x, bias):
+    expected = -128 if x == 1 else 127
     if conv:
-        with pytest.raises(OverflowError, match=r'custom channel 0 position \(0,0\) MAC\+bias'):
-            layers.integer_conv2d_layer_ref([[[x]]], [[[[1]]]], [bias], [65536], [17], relu=False, layer='custom')
+        assert layers.integer_conv2d_layer_ref([[[x]]], [[[[1]]]], [bias], [65536], [17], relu=False) == [[[expected]]]
     else:
-        with pytest.raises(OverflowError, match=r'linear channel 0.*MAC\+bias'):
-            layers.integer_linear_layer_ref([x], [[1]], [bias], [65536], [17], relu=False)
+        assert layers.integer_linear_layer_ref([x], [[1]], [bias], [65536], [17], relu=False) == [expected]
 
 
-def test_mac_overflow_propagates():
-    with pytest.raises(OverflowError, match='exact sum=2147483648'):
-        layers.integer_linear_layer_ref([-128]*131072, [[-128]*131072], [0], [65536], [17], relu=False)
+def test_mac_wrap_propagates():
+    assert layers.integer_linear_layer_ref([-128]*131072, [[-128]*131072], [0], [65536], [17], relu=False) == [-128]
+
+
+@pytest.mark.parametrize('n',[0,1,49,50,63])
+def test_layer_accepts_full_shift_domain(n):
+    assert layers.integer_linear_layer_ref([1],[[1]],[0],[65536],[n],relu=False) == ([127] if n <= 1 else [0])
 
 
 @pytest.mark.parametrize('field,bad,exception', [
     ('M0', [65535], ValueError), ('M0', [131072], ValueError),
-    ('n', [0], ValueError), *[('n', [v], OverflowError) for v in range(50,64)],
     ('n', [-1], ValueError), ('n', [64], ValueError),
     ('bias_q', [2**31], OverflowError), ('bias_q', [-2**31-1], OverflowError),
     ('bias_q', [True], TypeError), ('M0', [1.0], TypeError), ('n', [False], TypeError),

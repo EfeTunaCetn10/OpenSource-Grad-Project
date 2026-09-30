@@ -1,3 +1,13 @@
+# 2026-09-30 kontrat senkronizasyonu
+
+Aday seçim politikası n=1…49 olarak korunmuştur; artık bu aralık signed50 kaynaklı zorunluluk değildir. Kilitli requant aritmetiği signed64 ve n=0…63 kullanır.
+
+Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
+Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n reddi ve
+taşma-exception ifadeleri güncel API davranışını tanımlamaz.
+
+---
+
 # Multiplier temsil edilebilirlik analizi — candidate/diagnostic
 
 Bu çalışma nihai hardware parametre üreticisi değildir. Mevcut aday ölçeklerden

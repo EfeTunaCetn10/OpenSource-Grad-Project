@@ -1,3 +1,13 @@
+# 2026-09-30 kontrat senkronizasyonu
+
+MAC taşmada exception yerine wrap32 sonucu verir. Tam Python int toplamı sonunda bir wrap, per-add modulo ile eşdeğerdir. checked_int32 yapılandırma doğrulaması için korunur.
+
+Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
+Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n reddi ve
+taşma-exception ifadeleri güncel API davranışını tanımlamaz.
+
+---
+
 # Bias'sız integer Linear/MAC referansı
 
 [integer_linear_ref.py](../../integer_linear_ref.py), hazır signed INT8

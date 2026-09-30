@@ -2,7 +2,7 @@ from copy import deepcopy
 
 import pytest
 
-from integer_linear_ref import checked_int32, integer_linear_ref
+from integer_linear_ref import checked_int32, integer_linear_ref, wrap32
 
 
 def test_two_channel_manual_mac_and_immutability():
@@ -62,7 +62,7 @@ def test_int32_exact_boundaries(value):
 
 @pytest.mark.parametrize('value', [-(2**31) - 1, 2**31])
 def test_int32_overflow(value):
-    with pytest.raises(OverflowError, match='RTL overflow policy unresolved'):
+    with pytest.raises(OverflowError, match='configuration value'):
         checked_int32(value)
 
 
@@ -72,22 +72,27 @@ def test_int32_guard_rejects_implicit_conversion(value):
         checked_int32(value)
 
 
-def test_reachable_positive_mac_overflow():
-    # 131072 * (-128 * -128) = 2^31, one above INT32 maximum.
-    with pytest.raises(OverflowError, match=r'output\[0\] exact sum=2147483648'):
-        integer_linear_ref([-128] * 131072, [[-128] * 131072])
+def test_reachable_positive_mac_wrap():
+    assert integer_linear_ref([-128]*131072, [[-128]*131072]) == [-2147483648]
 
 
-def test_reachable_negative_mac_overflow():
-    # 132105 * (-128 * 127) = -2147498880, below INT32 minimum.
-    with pytest.raises(OverflowError, match='exact sum=-2147498880'):
-        integer_linear_ref([-128] * 132105, [[127] * 132105])
+def test_reachable_negative_mac_wrap():
+    assert integer_linear_ref([-128]*132105, [[127]*132105]) == [2147468416]
 
 
-def test_partial_overflow_then_cancellation_is_reported():
-    # Positive prefix reaches 2^31, final -128 term returns to INT32 range.
-    x = [-128] * 131073
-    w = [[-128] * 131072 + [1]]
-    with pytest.raises(OverflowError, match=r'partial sum at k=131071 \(final=2147483520\)'):
-        integer_linear_ref(x, w)
+def test_partial_wrap_then_cancellation():
+    x = [-128]*131073
+    w = [[-128]*131072 + [1]]
+    assert integer_linear_ref(x,w) == [2147483520]
     assert x[-1] == -128 and w[0][-1] == 1
+
+
+@pytest.mark.parametrize('value,expected', [(2**31,-2**31),(-2**31-1,2**31-1),
+                                           (2**32,0),(-2**32,0),(2**65+5,5)])
+def test_wrap32(value,expected):
+    assert wrap32(value) == expected
+
+
+@pytest.mark.parametrize('bad',[True,1.0,'1'])
+def test_wrap32_type(bad):
+    with pytest.raises(TypeError): wrap32(bad)

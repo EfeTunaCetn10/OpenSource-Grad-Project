@@ -1,14 +1,15 @@
-"""Standalone ADR-003 integer requantizer; strict 50-bit intermediates, no wrap.
+"""ADR-003 revision 2026-09-25: INT32 wrap, signed-64 requant, n=0..63.
 
-Temporary supported shift domain: 1..49. n=0 is unresolved in the ADR;
-50..63 cannot represent the positive rounding constant in signed 50 bits.
-Only built-in Python int operands are accepted (including rejection of bool).
+requant_raw keeps pre-clamp y_raw observable. Existing scalar return APIs remain.
 """
+from integer_linear_ref import wrap32
 
 INT32_MIN = -(1 << 31)
 INT32_MAX = (1 << 31) - 1
 SIGNED50_MIN = -(1 << 49)
 SIGNED50_MAX = (1 << 49) - 1
+SIGNED64_MIN = -(1 << 63)
+SIGNED64_MAX = (1 << 63) - 1
 M0_MIN = 1 << 16
 M0_MAX = (1 << 17) - 1
 
@@ -19,7 +20,7 @@ def _require_int(value: int, name: str) -> None:
 
 
 def checked_signed50(value: int, *, name: str = 'intermediate') -> int:
-    """Validate a mathematical integer without truncation, wrap or saturation."""
+    """Legacy 50-bit range utility, retained for callers; NOT the requant path."""
     _require_int(value, name)
     if not SIGNED50_MIN <= value <= SIGNED50_MAX:
         raise OverflowError(f'{name}={value} is outside signed 50-bit range '
@@ -27,26 +28,30 @@ def checked_signed50(value: int, *, name: str = 'intermediate') -> int:
     return value
 
 
-def requant_raw(acc: int, M0: int, n: int) -> int:
-    """Return the rounded integer before final INT8 saturation.
 
-    Python >> on negative int is arithmetic (floor), matching signed RTL >>>.
-    The rounding operand itself must fit, even if a negative product could
-    bring an otherwise too-large rounding constant back into range.
+def checked_signed64(value: int, *, name: str = 'intermediate') -> int:
+    """Validate a signed-64 intermediate; never truncate or saturate."""
+    _require_int(value, name)
+    if not SIGNED64_MIN <= value <= SIGNED64_MAX:
+        raise OverflowError(f'{name}={value} outside signed 64-bit range')
+    return value
+
+
+def requant_raw(acc: int, M0: int, n: int) -> int:
+    """Wrap accumulator input to INT32, return pre-clamp half-up result.
+
+    n=0 has zero rounding offset and no shift. Product, offset and sum are
+    explicitly checked as signed64. No hardware timing or flag protocol implied.
     """
     for name, value in (('acc', acc), ('M0', M0), ('n', n)):
         _require_int(value, name)
-    if not INT32_MIN <= acc <= INT32_MAX:
-        raise ValueError('acc must be signed INT32 [-2^31, 2^31-1]')
     if not M0_MIN <= M0 <= M0_MAX:
         raise ValueError('M0 must be in [2^16, 2^17); positive signed 18-bit carrier')
     if not 0 <= n <= 63:
         raise ValueError('n must fit unsigned 6-bit [0, 63]')
-    if n == 0:
-        raise ValueError('n=0 is temporarily unsupported: ADR-003 rounding policy unresolved')
-    product = checked_signed50(acc * M0, name='acc*M0')
-    rounding = checked_signed50(1 << (n - 1), name=f'rounding constant for n={n}')
-    total = checked_signed50(product + rounding, name='acc*M0 + rounding constant')
+    product = checked_signed64(wrap32(acc) * M0, name='acc*M0')
+    rounding = checked_signed64(0 if n == 0 else 1 << (n - 1), name='half_ulp')
+    total = checked_signed64(product + rounding, name='product + half_ulp')
     return total >> n
 
 

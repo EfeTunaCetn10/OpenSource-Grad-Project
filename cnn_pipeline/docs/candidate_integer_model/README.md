@@ -1,3 +1,13 @@
+# 2026-09-30 kontrat senkronizasyonu
+
+Paketlere accumulator_safety eklendi. abs(bias_q[c])+K*16384 <= 2^31-1 kanıtı hazırlamada doğrulanır. Runtime wrap semantiğinin yerine geçmez. CHW/native weights ve FC3 INT8 requant korunur; HWC/FC1 permütasyonu/FC3 bypass henüz öneridir.
+
+Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
+Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n reddi ve
+taşma-exception ifadeleri güncel API davranışını tanımlamaz.
+
+---
+
 # Bellek içi aday integer LeNet parametreleri
 
 Bu modül yalnız **candidate software parameters** hazırlar; forward, MAC,

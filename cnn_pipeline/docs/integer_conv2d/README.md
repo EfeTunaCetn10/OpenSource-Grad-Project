@@ -1,3 +1,13 @@
+# 2026-09-30 kontrat senkronizasyonu
+
+Conv MAC sonunda wrap32 uygulanır; ara taşma sonucu reddetmez. CHW/cross-correlation ve native kernel sırası değişmedi.
+
+Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
+Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n reddi ve
+taşma-exception ifadeleri güncel API davranışını tanımlamaz.
+
+---
+
 # Bias'sız integer Conv2d matematiksel referansı
 
 [integer_conv2d_ref.py](../../integer_conv2d_ref.py) hazır signed INT8 değerlerle

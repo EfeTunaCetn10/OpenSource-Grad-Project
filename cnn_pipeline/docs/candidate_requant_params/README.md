@@ -1,3 +1,13 @@
+# 2026-09-30 kontrat senkronizasyonu
+
+Requant çift doğrulaması n=0…63 kabul eder. Aday seçici halen n=1…49 tarar: bu ayrı bir aday hazırlama politikasıdır, aritmetik genişlik sınırı değildir.
+
+Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
+Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n reddi ve
+taşma-exception ifadeleri güncel API davranışını tanımlamaz.
+
+---
+
 # Candidate software parameters: M0/n arayüzü
 
 `candidate_requant_params.py` içindeki

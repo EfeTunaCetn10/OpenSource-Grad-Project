@@ -104,5 +104,4 @@ def test_oversized_synthetic_kernel_overflow_location():
     # Not a LeNet shape. 131072 products of 16384 reach 2^31.
     x = [[[-128] * 131072]]
     w = [[[[-128] * 131072]]]
-    with pytest.raises(OverflowError, match=r'wide_test output\[0,0,0\] partial ci=0,kh=0,kw=131071'):
-        integer_conv2d_ref(x, w, layer='wide_test')
+    assert integer_conv2d_ref(x, w, layer='wide_test') == [[[-2147483648]]]

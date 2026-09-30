@@ -51,7 +51,7 @@ def candidate_requant_params(s_x, s_y, s_w):
                              'entire call rejected, no partial parameters')
         M0, n = pair['M0'], pair['n']
         if (type(M0) is not int or type(n) is not int or
-                not M0_MIN <= M0 <= M0_MAX or not 1 <= n <= 49):
+                not M0_MIN <= M0 <= M0_MAX or not 0 <= n <= 63):
             raise ValueError(f'channel {channel}: candidate violates requant contract')
         requant_raw(0, M0, n)  # Exercise the existing signed-width guards too.
         channels.append({'channel': channel, 'M': M, **pair,

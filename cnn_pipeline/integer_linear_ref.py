@@ -1,6 +1,6 @@
 """Bias-free x[K] * W[out,K] reference using only built-in Python integers.
 
-Strict diagnostic INT32 checks reject overflow; they do not define RTL policy.
+ADR-003 (2026-09-25): accumulator arithmetic wraps modulo 2^32.
 No quantization, bias, requantization, batching or hardware layout conversion.
 """
 
@@ -14,8 +14,16 @@ def checked_int32(value: int, *, name: str = 'sum') -> int:
         raise TypeError(f'{name} must be a built-in Python int')
     if not INT32_MIN <= value <= INT32_MAX:
         raise OverflowError(f'{name}={value} is outside signed INT32 '
-                            f'[{INT32_MIN}, {INT32_MAX}]; RTL overflow policy unresolved')
+                            f'[{INT32_MIN}, {INT32_MAX}]; configuration value is not representable')
     return value
+
+
+
+def wrap32(value: int) -> int:
+    """Signed two's-complement modulo; not saturation or a range assertion."""
+    if type(value) is not int:
+        raise TypeError('wrap32 requires a built-in Python int')
+    return ((value + (1 << 31)) % (1 << 32)) - (1 << 31)
 
 
 def _container(value, name: str) -> None:
@@ -35,10 +43,8 @@ def _int8(value, name: str) -> None:
 def integer_linear_ref(x: list | tuple, weights: list | tuple) -> list[int]:
     """Return sums in input row order; weights must have shape [out,K].
 
-    All data are validated before calculation. Exact sums are computed with
-    Python int. Final sums and k-increasing partial sums must fit INT32.
-    Even cancellation after a partial overflow is rejected diagnostically;
-    this traversal is not a claim about physical RTL accumulation order.
+    All data are validated before calculation. Exact Python int sums are
+    wrapped once at the INT32 output boundary, equivalent to per-add wrap.
     """
     _container(x, 'x')
     _container(weights, 'weights')
@@ -53,14 +59,7 @@ def integer_linear_ref(x: list | tuple, weights: list | tuple) -> list[int]:
     outputs = []
     for c, row in enumerate(weights):
         total = 0
-        first_overflow = None
-        for k, (value, weight) in enumerate(zip(x, row)):
+        for value, weight in zip(x, row):
             total += value * weight
-            if first_overflow is None and not INT32_MIN <= total <= INT32_MAX:
-                first_overflow = (k, total)
-        checked_int32(total, name=f'output[{c}] exact sum')
-        if first_overflow is not None:
-            k, value = first_overflow
-            checked_int32(value, name=f'output[{c}] partial sum at k={k} (final={total})')
-        outputs.append(total)
+        outputs.append(wrap32(total))
     return outputs

@@ -102,3 +102,19 @@ def test_actual_hash_rejection(provenance, target):
         path.write_text(json.dumps(q))
     with pytest.raises(ValueError, match='hash mismatch|identity mismatch'):
         module.load_candidate_integer_model(path, root=root)
+
+
+def test_structural_safety_attached(fixture):
+    result = module.prepare_candidate_integer_model(*fixture)
+    assert [p['accumulator_safety']['K'] for p in result['layers'].values()] == [75,150,400,120,84]
+    for p in result['layers'].values():
+        proof = p['accumulator_safety']
+        assert proof['safe']
+        assert proof['min_margin'] == 2**31-1-proof['K']*16384-max(map(abs,p['bias_q']))
+
+
+def test_unsafe_bias_configuration_rejected(fixture):
+    # INT32 bias is representable, but insufficient worst-case MAC headroom.
+    fixture[1]['features.0.bias'][0] = 1073741000.0
+    with pytest.raises(ValueError, match="structural INT32 safety"):
+        module.prepare_candidate_integer_model(*fixture)
