@@ -57,6 +57,9 @@ def candidate_integer_forward(image, prepared, *, trace=False):
             records.append({'stage': stage, 'shape': expected, 'min': tensor.min().item(),
                             'max': tensor.max().item(), 'domain': 'signed INT8 / Python int',
                             'scale_name': scale_key, 'scale': scale, 'zero_point': 0,
+                            'output_count': tensor.numel(),
+                            'minus128_count': int((tensor == -128).sum()),
+                            'plus127_count': int((tensor == 127).sum()),
                             'saturation_count': None,
                             'saturation_status': 'not exposed by existing layer API',
                             'endpoint_count': int(((tensor == (0 if relu else -128)) | (tensor == 127)).sum())})

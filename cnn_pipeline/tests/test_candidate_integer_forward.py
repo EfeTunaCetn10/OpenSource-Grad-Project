@@ -108,3 +108,12 @@ def test_sparse_nonzero_end_to_end(fixture):
     # both max pools; final channel 1 independently negates it.
     out=forward.candidate_integer_forward(torch.full((3,32,32),3.),prepared)
     assert out==[3,-3,0,0,0,0,0,0,0,0]
+
+
+def test_trace_boundary_counts_are_separate_from_relu_zeros(prepared):
+    _,trace=forward.candidate_integer_forward(torch.zeros(3,32,32),prepared,trace=True)
+    hidden=trace['stages'][1]
+    assert hidden['output_count']==6*28*28
+    assert hidden['endpoint_count']==6*28*28  # All ReLU-domain lower endpoints.
+    assert hidden['minus128_count']==hidden['plus127_count']==0
+    assert hidden['saturation_count'] is None
