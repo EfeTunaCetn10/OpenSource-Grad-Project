@@ -1,8 +1,15 @@
-# CNN Training and Evaluation Pipeline
+# CNN FP32 and Candidate INT8 Pipeline
 
 PyTorch tools for training and evaluating a LeNet-style CNN for the PYNQ-Z2
 accelerator project. The pipeline covers MNIST validation, capture-day-based
-insect dataset preparation, RGB normalization, and FP32 training.
+insect dataset preparation, RGB normalization, FP32 training, candidate INT8
+parameter preparation, full integer forward, validation and canonical test vectors.
+
+See the [authoritative current status](../README.md#current-validated-status) for
+validated metrics, completed work and the dependency on Person B’s RTL/interface.
+No RTL is available and cocotb/RTL equivalence has not been established.
+The training instructions below are retained for reproducibility; continuing the
+current candidate pipeline does not require retraining or recalibration.
 
 ## Model and baseline
 
@@ -32,8 +39,9 @@ biological species.
 
 Results include weak performance on several classes. Read the
 [full evaluation](docs/fp32_baseline/README.md) before interpreting the overall
-accuracy. INT8 quantization and integer golden-reference export are the next
-development stages.
+accuracy. These are historical FP32 baseline results, not the current INT8
+validation comparison. The candidate forward and canonical vector export are
+complete; see the current status linked above.
 
 ## Environment
 

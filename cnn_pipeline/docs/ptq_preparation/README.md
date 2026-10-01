@@ -1,5 +1,9 @@
 # INT8 PTQ ve integer golden reference hazırlık raporu
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+This component report preserves its original task scope and historical results;
+statements about work not yet performed apply to that stage, not today’s pipeline.
+
 İnceleme tarihi: **22 Eylül 2026**. Kapsam: mevcut dosyaların, yerel Python
 ortamının, seçilen FP32 checkpoint'in ve kabul edilmiş ADR'lerin incelenmesi.
 

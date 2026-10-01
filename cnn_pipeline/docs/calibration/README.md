@@ -1,5 +1,9 @@
 # Deterministik calibration veri hattı
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+This component report preserves its original task scope and historical results;
+statements about work not yet performed apply to that stage, not today’s pipeline.
+
 24 Eylül 2026 — bu adım yalnız **FP32 giriş verisini** hazırlar ve kontrol eder.
 Model eğitimi, model forward/accuracy hesabı, observer, scale/qparam veya
 quantized model üretimi yapmaz.

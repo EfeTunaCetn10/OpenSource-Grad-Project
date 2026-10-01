@@ -1,5 +1,9 @@
 # Integer MaxPool2d ve CHW Flatten
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+This component report preserves its original task scope and historical results;
+statements about work not yet performed apply to that stage, not today’s pipeline.
+
 [integer_tensor_ops_ref.py](../../integer_tensor_ops_ref.py), saf Python integer
 ile iki bağımsız işlem sağlar. Conv/Linear/requantizer koduna bağımlı değildir;
 PyTorch yalnız test karşılaştırmasında kullanılır.

@@ -1,5 +1,7 @@
 # 2026-09-30 kontrat senkronizasyonu
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+
 Bias quantization aday rounding politikası değişmedi; INT32 dışındaki üretilen bias bir yapılandırma hatası olarak reddedilir. Runtime MAC+bias ise artık kilitli wrap32 kullanır. Pool/Flatten scale aktarımı kilitlidir.
 
 Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
@@ -7,6 +9,8 @@ Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n
 taşma-exception ifadeleri güncel API davranışını tanımlamaz.
 
 ---
+
+## Historical initial implementation (superseded where noted above)
 
 # Aday bias quantization referansı
 

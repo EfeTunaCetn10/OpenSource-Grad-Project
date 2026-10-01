@@ -1,5 +1,7 @@
 # Deterministic validation: FP32 versus candidate INT8
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+
 `compare_candidate_validation.py` evaluates the same normalized image tensor through
 normal FP32 LeNet and the existing candidate integer forward. No training,
 calibration, parameter tuning, test-split inference, hardware export or topology
@@ -103,7 +105,9 @@ both wrong: 773. The FP32 result reproduces the selected model validation record
 | hfly_sphaero | 68 | 17.65 | 10.29 | 92.65 |
 
 No class is empty in this full validation split. Per-class performance is uneven;
-high agreement does not establish good classification quality. No parameters were
+the FP32 baseline is modest, and the small global quantization drop does not
+remove these class-specific weaknesses. High agreement does not establish good
+classification quality. No parameters were
 adjusted in response to these results.
 
 Input clipping: **0 / 5,449,728 elements (0%)**.
@@ -132,7 +136,7 @@ Reports:
 - `outputs/validation_comparison/seed42_pilot100_run01/report.json`
 - `outputs/validation_comparison/seed42_full_run01/report.json`
 
-Verification: focused **29 passed in 2.72 s**; full suite **545 passed in 4.42 s**.
+Historical validation-task verification: focused **29 passed in 2.72 s**; full suite **545 passed in 4.42 s**.
 The exact commands are above. `git diff --check` passed. An initial pilot attempt
 found a relative-path reporting error; it was fixed before the recorded pilot,
 and the failed attempt wrote no output artifact.

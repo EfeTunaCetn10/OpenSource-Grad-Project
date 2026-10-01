@@ -1,5 +1,7 @@
 # 2026-09-30 kontrat senkronizasyonu
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+
 Requant çift doğrulaması n=0…63 kabul eder. Aday seçici halen n=1…49 tarar: bu ayrı bir aday hazırlama politikasıdır, aritmetik genişlik sınırı değildir.
 
 Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
@@ -7,6 +9,8 @@ Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n
 taşma-exception ifadeleri güncel API davranışını tanımlamaz.
 
 ---
+
+## Historical initial implementation (superseded where noted above)
 
 # Candidate software parameters: M0/n arayüzü
 

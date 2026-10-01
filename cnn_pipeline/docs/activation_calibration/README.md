@@ -1,5 +1,9 @@
 # FP32 aktivasyon ve ağırlık istatistikleri
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+This component report preserves its original task scope and historical results;
+statements about work not yet performed apply to that stage, not today’s pipeline.
+
 24 Eylül 2026. Seçilen **seed=42, epoch=51** LeNet checkpoint'i üzerinde,
 mevcut train-only **10 × 100 görüntülük** calibration seçimi kullanıldı.
 Bu çalışma ham min/max/absmax ölçer; INT8 model/ağırlık, INT32 bias,

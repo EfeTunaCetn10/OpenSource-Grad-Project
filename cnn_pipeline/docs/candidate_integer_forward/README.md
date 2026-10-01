@@ -1,5 +1,7 @@
 # Candidate full INT8 LeNet forward — CHW
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+
 `candidate_integer_forward.py` connects existing verified integer components.
 It is candidate software inference, not FPGA/RTL equivalence or hardware export.
 
@@ -52,7 +54,9 @@ Trace records shape, min/max, integer domain, scale name/value, zero-point and
 endpoint counts. Input clipping counts use existing `scaled_values` and
 `round_half_up` helpers to count rounded values outside [-127,127]; no second
 quantizer is implemented. Nonzero clipping raises a RuntimeWarning even with
-trace=False, so clipping is not silently hidden. Trace does not retain activations.
+trace=False, so clipping is not silently hidden. Default trace does not retain
+activations. With `trace=True, capture_tensors=True`, stage records additionally
+contain independent tensor values for canonical export; numerical behavior is unchanged.
 
 Existing weighted-layer APIs expose only clamped outputs. Therefore internal
 `saturation_count` is null, with an explicit unavailable status. Endpoint counts
@@ -99,7 +103,12 @@ PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 /home/cgj/anaconda
 PYTHONDONTWRITEBYTECODE=1 OMP_NUM_THREADS=2 MKL_NUM_THREADS=2 /home/cgj/anaconda3/envs/pynq-cnn/bin/python -B -m pytest -c cnn_pipeline/pytest.ini -q -p no:cacheprovider cnn_pipeline/tests
 ```
 
-Only the forward module, its test module and this README were added for this task.
+### Historical forward implementation run
+
+The following scope and test counts describe the initial forward task only.
+Full validation and canonical export have since completed; see current status.
+
+Only the forward module, its test module and this README were added for that task.
 Earlier contract-sync implementation was left unchanged. No Git write was performed;
 training/calibration/data/checkpoint/qparam policies and files were not changed.
 No dataset-wide accuracy/clipping evaluation or final hardware artifacts produced.

@@ -1,5 +1,7 @@
 # Canonical candidate golden test vectors
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+
 These deterministic JSON vectors are mathematical reference data for future
 cocotb/RTL comparisons. They are **not** packed hardware memory/register files
 or evidence that RTL matches Python. No cocotb, RTL or timing code is added.
@@ -106,6 +108,6 @@ Previous validation reports remain unchanged historical artifacts: their source
 hash identifies the earlier forward implementation before optional capture was
 added. No Git write or package install was performed.
 
-Verification: focused tests **27 passed**; full regression **555 passed**.
+Recorded export-task verification: focused tests **27 passed**; full regression **555 passed**.
 The real export contains 18 JSON files; all 17 payload hashes in metadata were
 verified after writing. `git diff --check` passed.

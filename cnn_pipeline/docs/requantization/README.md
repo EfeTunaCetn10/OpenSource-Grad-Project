@@ -1,5 +1,7 @@
 # 2026-09-30 kontrat senkronizasyonu
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+
 Requant artık signed64 kullanır; n=0…63 geçerlidir (n=0 offset=0). acc girdisi wrap32 ile INT32 alanına alınır. requant_raw pre-clamp sonucu korur. checked_signed50 yalnız eski çağırıcılar için yardımcı olarak kaldı, hesap yolunda kullanılmaz.
 
 Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
@@ -7,6 +9,8 @@ Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n
 taşma-exception ifadeleri güncel API davranışını tanımlamaz.
 
 ---
+
+## Historical initial implementation (superseded where noted above)
 
 # INT32 → INT8 requantization referansı — T_NUM_REQ_001
 

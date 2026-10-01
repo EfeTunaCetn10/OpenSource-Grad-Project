@@ -1,12 +1,15 @@
 # Contract synchronization — 2026-09-30
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+
 Authoritative contract snapshot: GitHub main commit
 [`c8168425ab965fa8e68caae7f52375c9db7c9afc`](https://github.com/EfeTunaCetn10/OpenSource-Grad-Project/tree/c8168425ab965fa8e68caae7f52375c9db7c9afc/Kontratlar).
-The local feature checkout still contains the older ADR-003 and lacks ADR-014/015/016
-and the September 25 interface note. All five updated documents were read via
-GitHub's read-only API at the pinned commit and cached under /tmp. No Git write,
-fetch, merge or ADR modification was performed. Local ADR links therefore do not
-yet describe the updated code; the user must synchronize contracts separately.
+At the time of this synchronization task, the feature checkout lacked the updated
+contracts, so the pinned snapshot was read via GitHub's read-only API. That is
+historical context: the local checkout now contains the updated ADR-003
+(modified 2026-09-25) and proposed ADR-014/015/016. The earlier instruction to
+synchronize missing contracts is no longer a current blocker. No ADR is changed
+by this documentation update.
 
 ## LOCKED changes implemented
 
@@ -46,7 +49,9 @@ ADR-015 shadow/commit/AXI registers; ADR-016 HWC transport, byte lanes, padding,
 FC1 export permutation and FC3 INT32 bypass are not mandatory golden semantics.
 No optional packing helper was needed for this numerical sync. CHW flatten and
 native FC1 weights remain unchanged; FC3 still requantizes to signed INT8 without
-ReLU. No timing, status-flag tuple API, full forward or hardware files were added.
+ReLU. During that sync task, no timing, status-flag tuple API, full forward or hardware
+files were added. Full forward and canonical vectors were implemented later;
+proposed transport/register behavior remains unimplemented.
 Pre-clamp y_raw is already observable through the existing requant_raw function.
 
 ## Real selected candidate safety proof
@@ -82,7 +87,7 @@ Likewise practical multiplier bands are observations, not arithmetic restriction
 The interface note's suggested `(y,sat,ovf)` API is not adopted while ADR-014 remains
 proposed; final wrap values do not reconstruct per-add sticky overflow events.
 
-## Exact test commands and results
+## Historical synchronization test commands and results
 
 Run from the repository root, using the existing environment (no packages installed):
 

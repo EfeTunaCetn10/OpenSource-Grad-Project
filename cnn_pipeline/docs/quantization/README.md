@@ -1,5 +1,9 @@
 # Candidate PTQ policy: qparam ve INT8 ağırlık üretimi
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+This component report preserves its original task scope and historical results;
+statements about work not yet performed apply to that stage, not today’s pipeline.
+
 Bu adım mevcut FP32 istatistiklerinden aday parametreler üretir. **Kabul edilmiş
 hardware kontratı değildir.** Integer CNN, golden reference, bias quantization,
 M0/n veya ağırlık-bankası export'u içermez. Gerçek calibration yeniden

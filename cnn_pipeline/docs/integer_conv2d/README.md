@@ -1,5 +1,7 @@
 # 2026-09-30 kontrat senkronizasyonu
 
+Project-wide progress and latest regression: [current validated status](../../../README.md#current-validated-status).
+
 Conv MAC sonunda wrap32 uygulanır; ara taşma sonucu reddetmez. CHW/cross-correlation ve native kernel sırası değişmedi.
 
 Güncel dayanak ve testler: [Contract sync report](../contract_sync/README.md).
@@ -7,6 +9,8 @@ Aşağıdaki önceki sürüm kaydı tarihsel olarak korunmuştur; eski 50-bit, n
 taşma-exception ifadeleri güncel API davranışını tanımlamaz.
 
 ---
+
+## Historical initial implementation (superseded where noted above)
 
 # Bias'sız integer Conv2d matematiksel referansı
 
