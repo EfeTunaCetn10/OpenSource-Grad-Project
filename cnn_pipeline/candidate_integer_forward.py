@@ -1,4 +1,5 @@
 """Candidate full INT8 LeNet forward, CHW mathematical semantics; no hardware I/O."""
+from copy import deepcopy
 import math
 import warnings
 
@@ -10,15 +11,18 @@ from integer_layer_ref import integer_conv2d_layer_ref, integer_linear_layer_ref
 from integer_tensor_ops_ref import integer_maxpool2d_ref, integer_flatten_chw_ref
 
 
-def candidate_integer_forward(image, prepared, *, trace=False):
+def candidate_integer_forward(image, prepared, *, trace=False, capture_tensors=False):
     """Return ten Python int logits, or (logits, diagnostics) when trace=True.
 
     image is a normalized CPU float32 tensor [3,32,32]. prepared comes from
     load_candidate_integer_model (real artifacts) or its pure preparation API.
     Input clipping warns even without trace. Intermediate saturation counts are
     unavailable from existing layer APIs; endpoint counts are NOT saturation.
+    capture_tensors=True requires trace and adds independent integer stage values.
     No model loading, preprocessing, parameter selection or mutation occurs here.
     """
+    if type(capture_tensors) is not bool or (capture_tensors and not trace):
+        raise ValueError('capture_tensors requires trace=True and a bool flag')
     if type(trace) is not bool:
         raise TypeError('trace must be bool')
     if not isinstance(image, torch.Tensor) or image.dtype != torch.float32 or image.device.type != 'cpu':
@@ -63,6 +67,8 @@ def candidate_integer_forward(image, prepared, *, trace=False):
                             'saturation_count': None,
                             'saturation_status': 'not exposed by existing layer API',
                             'endpoint_count': int(((tensor == (0 if relu else -128)) | (tensor == 127)).sum())})
+            if capture_tensors:
+                records[-1]['values'] = deepcopy(data)
     record('input',value,[3,32,32],'input',sx)
     shapes = [[6,28,28],[16,10,10],[120],[84],[10]]
     for i, (name, _, ykey, _) in enumerate(LAYERS):
