@@ -2,7 +2,11 @@
 
 // T_REQ_TIMING_001: handshake, stall, reset, and conservation checks.
 module tb_requant_unit_timing;
-    localparam int LAT = 3;
+    // requant_unit is five physical stages since the 2026-10-05 re-pipelining
+    // (S0 bias add, S1 multiply, S2 rounding add, S3 shift, S4 clamp).  ADR-014
+    // fixes the contract as a knowable latency, not a particular number, and the
+    // checks below are written against this parameter rather than a constant.
+    localparam int LAT = 5;
     localparam int MAX_EVENTS = 4096;
 
     logic clk = 0;
@@ -67,8 +71,8 @@ module tb_requant_unit_timing;
     assert property (p_hold_output)
         else begin $display("FAIL tb_requant_unit_timing: output changed while stalled"); errors = errors + 1; end
 
-    // A no-stall three-register pipeline has the accepted word in S2 on the
-    // third pipeline cycle. The scoreboard below checks that exact LAT-slot
+    // A no-stall pipeline has the accepted word in the result register on the
+    // LAT'th pipeline cycle. The scoreboard below checks that exact LAT-slot
     // history while out_ready is continuously high.
     integer no_stall_accept_hist [0:LAT-1];
     integer no_stall_hist_valid [0:LAT-1];

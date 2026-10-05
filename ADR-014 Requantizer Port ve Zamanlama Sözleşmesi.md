@@ -26,7 +26,7 @@ tags: [dnn-accelerator, adr, kontrat, rtl, requantizer, timing]
 | Config'in veriyle birlikte pipeline'da akması | Onay bekliyor |
 | Stall'da tek clock-enable ile tüm pipe'ın donması | Onay bekliyor |
 | K-streaming (chunk'lama değil) | Onay bekliyor |
-| `LAT = 3` | **Ölçüm bekliyor** — sentez/timing |
+| `LAT = 5` | **Ölçüldü** (2026-10-05) — sentez/timing; `LAT = 3` kapanmadı, aşağıya bkz. |
 
 ## Karar
 
@@ -37,7 +37,7 @@ module requant_unit #(
   parameter int ACC_W  = 32,
   parameter int M0_W   = 18,   // signed, MSB daima 0
   parameter int PROD_W = 64,   // ADR-003: product + rounding offset + shift
-  parameter int LAT    = 3     // sabit ve bilinir; TB bu parametreyi okur
+  parameter int LAT    = 5     // sabit ve bilinir; TB bu parametreyi okur
 )(
   input  logic                    clk,
   input  logic                    rst_n,        // async assert, sync deassert (ADR-008)
@@ -76,12 +76,45 @@ kırılmaz.
 | Stage | İş |
 |---|---|
 | S0 | `a = wrap32(in_acc + cfg_bias_q)`, `ovf` tespiti; config bundle burada örneklenir |
-| S1 | `p = a · cfg_m0` (DSP48E1; sayısı sentezle doğrulanacak, ADR-003 Tuzak 2) |
-| S2 | `p + half_ulp`, `>>> n` (64-bit), `clamp(lo,127)` |
+| S1 | `p = a · cfg_m0` (DSP48E1 ×2, cascade; 32×18 tek DSP'ye sığmaz) |
+| S2 | `p + half_ulp(n)` (64-bit add; `half_ulp` 6→64 one-hot decoder) |
+| S3 | `raw = cfg_bypass ? a : (s >>> n)` (64-bit variable arithmetic shift) |
+| S4 | `clamp(lo,127)` → `out_y`, `out_sat` (result register) |
 
-`LAT = 3` hedef; 100 MHz'de S2 sıkışırsa shift ve clamp ayrılıp `LAT = 4` olur.
+**`LAT = 5`, ölçümle belirlendi (2026-10-05).** Bu ADR `LAT = 3`'ü "ölçüm bekliyor"
+olarak işaretlemişti ve 100 MHz'de S2 sıkışırsa shift/clamp ayrılıp `LAT = 4` olacağını
+öngörmüştü. Ölçüm yapıldı, öngörü doğru çıktı ama bir adım daha gerekti.
+
+Üç stage'li hal OOC sentezde (xc7z020clg400-1, 100 MHz) **WNS −2.509 ns** verdi: kritik yol
+`s1_shift_n` → `s2_sat`, **34 logic level, 24 CARRY4, 12.502 ns**; bunun 6.423 ns'si salt
+logic, yani stage yapısal olarak uzundu, yerleşim sorunu değildi.
+
+Stage başına ölçülen gecikmeler (beş stage'li halde):
+
+| Stage | Datapath | Logic levels | Slack |
+|---|---|---|---|
+| S2 (decode + add) | 4.521 ns | 18 (16 CARRY4) | +5.504 ns |
+| S3 (variable shift) | 4.212 ns | 5 LUT | +5.781 ns |
+| S4 (clamp) | 2.582 ns | 2 LUT | +7.165 ns |
+| S1 (DSP cascade) | 4.261 ns | 0 | **+4.255 ns ← limit** |
+
+Beş stage'de limit artık aritmetik değil, **DSP48 cascade'i**; aritmetik stage'lerin hepsinde
+5,5 ns'den fazla pay var. Yani beşinci stage frekansa hiçbir şey ödetmiyor. `LAT = 4`
+kurulabilirdi (add | shift+clamp ≈ 6,79 ns → tahmini ~+2,4 ns pay) ama bu, ölçülen 4,255 ns
+payı ~2,4 ns'ye düşürmek karşılığında tile kuyruğunda bir cycle kazandırırdı — Conv1'in
+112 invocation'ında ~%0,45. Entegrasyon top'u ve full route/STA henüz yapılmadığı için
+pay korundu.
+
+Maliyet: `requant_unit` 2 DSP48 / 658 LUT / 508 FF, **WNS +4.255 ns**. Sekiz lane'lik
+`requant_array` 16 DSP48 / 4320 LUT / 2539 FF, **WNS +3.380 ns** — payload'ı iki ek stage
+boyunca taşımak lane başına ~176 FF ekledi. Aritmetik ifadeler değişmedi, yalnız register
+eklendi; bu yüzden 60K vektörlük `T_NUM_REQ_001` bit-exactness kanıtı geçerliliğini koruyor
+ve yeniden geçti. Tek ifade değişikliği `half_ulp`: `1 << (n-1)` yerine indeksli bit atama —
+aynı değer, ama sentez data shifter değil decoder çıkarıyor.
+
 **Sözleşme sayının kendisi değil, sabit ve bilinir olmasıdır** — testbench `LAT`
-parametresini okur.
+parametresini okur. `tb_requant_unit_timing` LAT=4 ile koşulduğunda "no-stall latency got 5
+expected 4" diye başarısız oluyor, yani değeri gerçekten çiviliyor.
 
 ### Zamanlama kuralları
 
@@ -130,7 +163,8 @@ out_valid && !out_ready |=> out_valid && $stable(out_y) && $stable(out_last)
 ## Alternatifler
 - **Config'i statik tutmak (pipeline'da taşımamak):** bedava, ama "busy iken değişmez"
   kuralına bağımlı hale gelir; [[ADR-015 Register Map ve Parametre Yükleme|ADR-015]] bunu
-  zaten veriyor. Taşıma maliyeti ~57 bit × 3 stage × 8 birim register.
+  zaten veriyor. Taşıma maliyeti, `LAT = 5` sonrası ölçümle **lane başına ~176 FF**
+  (sekiz lane için 1131 → 2539 FF); LUT neredeyse değişmedi (4294 → 4320).
 - **Per-stage elastic handshake:** daha yüksek throughput, belirgin biçimde daha fazla
   doğrulama yüzeyi. Aşama 1'in darboğazı requantizer değil.
 - **`out_y_raw` yerine hiyerarşik referans:** Icarus destekliyor, ama refactor'da sessizce
