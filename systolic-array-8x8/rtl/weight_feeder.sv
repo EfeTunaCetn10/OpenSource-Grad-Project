@@ -2,8 +2,8 @@
 
 // ADR-011 weight-bank streamer.
 //
-// bank_mem is intentionally a stable hierarchical name: Stage 1 testbenches
-// preload its ROWS independent BRAM banks directly.  The banks also carry a
+// g_bank[r].bank_mem is intentionally a stable hierarchical name: Stage 1
+// testbenches preload the ROWS independent BRAM banks through it directly.  The banks also carry a
 // synchronous write port (wr_*): ADR-011 preloads them from eight .coe files
 // through the Block Memory Generator, and this port is the RTL-side equivalent
 // plus the hook for ADR-012 runtime loading.  It is not optional decoration --
@@ -55,8 +55,17 @@ module weight_feeder #(
     localparam int BASE_W = TILE_W + K_W;
     localparam int END_W  = BASE_W + 1;
 
-    (* ram_style = "block" *)
-    logic [DATA_WIDTH-1:0] bank_mem [0:ROWS-1][0:DEPTH-1];
+    // One ONE-dimensional array per bank, declared inside a generate block.
+    // A single two-dimensional `bank_mem [0:ROWS-1][0:DEPTH-1]` is functionally
+    // identical and reads more cleanly, but Vivado 2025.1 does not run block
+    // RAM inference on it: it reported
+    //   WARNING: [Synth 8-11357] Potential Runtime issue for 3D-RAM ...
+    //   bank_mem_reg with 524288 registers
+    // and tried to build 8 x 8192 x 8 bits out of flip-flops on a device that
+    // has 106,400 of them (measured 2026-10-07).  Per-bank arrays with a
+    // registered read are the pattern the tool actually infers, and they match
+    // ADR-011's eight physically separate banks one-to-one -- the eight .coe /
+    // Block Memory Generator instances of that ADR drop into this same place.
 
     logic [BASE_W-1:0] base_calc;
     logic [END_W-1:0]  end_calc;
@@ -69,7 +78,7 @@ module weight_feeder #(
 
     // Synchronous BRAM output stage.  rd_pending means rd_data contains the
     // oldest issued read and must be transferred before another read occurs.
-    logic [WORD_W-1:0] rd_data;
+    logic [WORD_W-1:0] rd_data;   // driven bank by bank in g_bank below
     logic              rd_pending;
 
     // Two-entry output FIFO.  The one-bit pointers wrap naturally at depth 2.
@@ -82,7 +91,6 @@ module weight_feeder #(
     logic rd_transfer;
     logic issue_read;
     logic last_accept;
-    integer bank_i;
 
     // Share the sole multiplication between the registered base and the
     // overflow guard.  Its result is sampled only on an accepted start.
@@ -113,7 +121,6 @@ module weight_feeder #(
             reads_issued   <= '0;
             beats_accepted <= '0;
             active         <= 1'b0;
-            rd_data        <= '0;
             rd_pending     <= 1'b0;
             fifo_data[0]   <= '0;
             fifo_data[1]   <= '0;
@@ -125,12 +132,6 @@ module weight_feeder #(
         end else begin
             done      <= 1'b0;
             cfg_error <= 1'b0;
-
-            // Weight load.  Loading while a tile streams is a caller error, not
-            // a hazard this block arbitrates: the read and the write are on the
-            // same clock and the assertion below pins the contract down.
-            if (wr_en)
-                bank_mem[wr_bank][wr_addr] <= wr_data;
 
             if (start && ready) begin
                 // A rejected command never enters active state, so the
@@ -168,9 +169,8 @@ module weight_feeder #(
                 endcase
 
                 if (issue_read) begin
-                    for (bank_i = 0; bank_i < ROWS; bank_i = bank_i + 1)
-                        rd_data[bank_i*DATA_WIDTH +: DATA_WIDTH]
-                            <= bank_mem[bank_i][next_addr];
+                    // The banks themselves are read in the per-bank blocks
+                    // below; this only tracks that a read is in flight.
                     rd_pending   <= 1'b1;
                     reads_issued <= reads_issued + 1'b1;
                     next_addr    <= next_addr + 1'b1;
@@ -241,6 +241,35 @@ module weight_feeder #(
             $error("TILE_MAX must be at least 1");
     end
 
+
+
+    // Bank r holds output channel tile_idx*ROWS + r and is read at the same
+    // address as every other bank on the same cycle (ADR-011).  The write port
+    // is how weights get in: with neither a write port nor an initialization a
+    // memory is a constant to synthesis, and the whole weight path was being
+    // optimized away while simulation stayed green, because the testbench loads
+    // the banks hierarchically.  `g_bank[r].bank_mem` is that hierarchical name.
+    genvar gb;
+    generate
+        for (gb = 0; gb < ROWS; gb++) begin : g_bank
+            (* ram_style = "block" *)
+            logic [DATA_WIDTH-1:0] bank_mem [0:DEPTH-1];
+            logic [DATA_WIDTH-1:0] rd_q;
+
+            // rd_q is the block RAM's own output register and is deliberately
+            // not reset: a reset here costs the inferred output register.  It
+            // is never consumed before it has been written, because rd_pending
+            // gates it.
+            always_ff @(posedge clk) begin
+                if (wr_en && (wr_bank == BANK_W'(gb)))
+                    bank_mem[wr_addr] <= wr_data;
+                if (issue_read)
+                    rd_q <= bank_mem[next_addr];
+            end
+
+            assign rd_data[gb*DATA_WIDTH +: DATA_WIDTH] = rd_q;
+        end
+    endgenerate
 
 `ifndef SYNTHESIS
     a_no_load_while_active: assert property (

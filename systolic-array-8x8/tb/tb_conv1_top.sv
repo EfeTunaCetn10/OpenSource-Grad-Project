@@ -83,6 +83,11 @@ module tb_conv1_top;
     logic [63:0] s_data;
     logic        s_last;
 
+    logic                        w_wr_en;
+    logic [$clog2(ROWS)-1:0]     w_wr_bank;
+    logic [$clog2(W_DEPTH)-1:0]  w_wr_addr;
+    logic [DATA_WIDTH-1:0]       w_wr_data;
+
     logic              frame_start;
     logic [ROW_W-1:0]  cfg_active_rows;
     logic [K_W-1:0]    cfg_k_len;
@@ -129,10 +134,10 @@ module tb_conv1_top;
         .s_ready            (s_ready),
         .s_data             (s_data),
         .s_last             (s_last),
-        .w_wr_en            (1'b0),
-        .w_wr_bank          ('0),
-        .w_wr_addr          ('0),
-        .w_wr_data          ('0),
+        .w_wr_en            (w_wr_en),
+        .w_wr_bank          (w_wr_bank),
+        .w_wr_addr          (w_wr_addr),
+        .w_wr_data          (w_wr_data),
         .frame_start        (frame_start),
         .cfg_active_rows    (cfg_active_rows),
         .cfg_k_len          (cfg_k_len),
@@ -217,16 +222,27 @@ module tb_conv1_top;
             cfg_bypass = 1'b0;
 
             // Bank r must hold output channel r at address tile_idx*K + k.
-            // Loading it lane by lane keeps this testbench honest about the
-            // ADR-011 mapping instead of hiding it behind one wide file.
+            // The banks are loaded through conv1_top's own wr_* port, so this
+            // testbench proves the ADR-011 mapping over the real load
+            // interface instead of poking the arrays.  Only the K_LEN words a
+            // single channel tile uses are written; nothing above that is ever
+            // read, and an out-of-range tile is the feeder's cfg_error guard.
             for (int r = 0; r < ROWS; r++) begin
-                for (int a = 0; a < W_DEPTH; a++)
+                for (int a = 0; a < K_LEN; a++)
                     wbank_tmp[a] = 8'h00;
                 path = $sformatf("../vectors/c1_wbank%0d.mem", r);
                 $readmemh(path, wbank_tmp, 0, K_LEN-1);
-                for (int a = 0; a < W_DEPTH; a++)
-                    dut.u_weights.bank_mem[r][a] = wbank_tmp[a];
+                for (int a = 0; a < K_LEN; a++) begin
+                    @(negedge clk);
+                    w_wr_en   = 1'b1;
+                    w_wr_bank = r[$clog2(ROWS)-1:0];
+                    w_wr_addr = a[$clog2(W_DEPTH)-1:0];
+                    w_wr_data = wbank_tmp[a];
+                    @(posedge clk);
+                end
             end
+            @(negedge clk);
+            w_wr_en = 1'b0;
         end
     endtask
 
@@ -234,6 +250,10 @@ module tb_conv1_top;
         begin
             @(negedge clk);
             rst_n       = 1'b0;
+            w_wr_en     = 1'b0;
+            w_wr_bank   = '0;
+            w_wr_addr   = '0;
+            w_wr_data   = '0;
             s_valid     = 1'b0;
             s_data      = '0;
             s_last      = 1'b0;

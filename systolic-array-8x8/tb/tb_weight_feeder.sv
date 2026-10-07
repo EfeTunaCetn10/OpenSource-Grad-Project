@@ -15,8 +15,14 @@ module tb_weight_feeder;
     localparam int TILE_W     = $clog2(TILE_MAX);
     localparam int WATCHDOG   = 10000;
 
+    localparam int BANK_W = $clog2(ROWS);
+
     logic clk = 1'b0;
     logic rst_n = 1'b0;
+    logic wr_en = 1'b0;
+    logic [BANK_W-1:0] wr_bank = '0;
+    logic [ADDR_W-1:0] wr_addr = '0;
+    logic [DATA_WIDTH-1:0] wr_data = '0;
     logic start = 1'b0;
     logic ready;
     logic [TILE_W-1:0] tile_idx = '0;
@@ -58,10 +64,10 @@ module tb_weight_feeder;
     ) dut (
         .clk          (clk),
         .rst_n        (rst_n),
-        .wr_en        (1'b0),
-        .wr_bank      ('0),
-        .wr_addr      ('0),
-        .wr_data      ('0),
+        .wr_en        (wr_en),
+        .wr_bank      (wr_bank),
+        .wr_addr      (wr_addr),
+        .wr_data      (wr_data),
         .start        (start),
         .ready        (ready),
         .tile_idx     (tile_idx),
@@ -223,10 +229,21 @@ module tb_weight_feeder;
     endtask
 
     initial begin
-        // Hierarchical Stage 1 preload of the stable bank_mem array.
+        // Load the banks through the real wr_* port instead of poking the
+        // arrays hierarchically.  Two reasons: it exercises the same path the
+        // integration top uses, and a hierarchical name into a generate array
+        // needs a constant index, which a loop variable is not.
         for (r = 0; r < ROWS; r = r + 1)
-            for (a = 0; a < DEPTH; a = a + 1)
-                dut.bank_mem[r][a] = mem_pattern(r, a);
+            for (a = 0; a < DEPTH; a = a + 1) begin
+                @(negedge clk);
+                wr_en   = 1'b1;
+                wr_bank = r[BANK_W-1:0];
+                wr_addr = a[ADDR_W-1:0];
+                wr_data = mem_pattern(r, a);
+                @(posedge clk);
+            end
+        @(negedge clk);
+        wr_en = 1'b0;
 
         repeat (4) @(posedge clk);
         rst_n = 1'b1;

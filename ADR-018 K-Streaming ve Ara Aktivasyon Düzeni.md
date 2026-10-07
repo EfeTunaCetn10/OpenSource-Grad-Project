@@ -354,6 +354,17 @@ kılıyor. Üçüncü bulgusu: `weight_feeder`'ın bankaları ne initialization 
 sahip olduğu için sentez onları sabite indirip **tamamen siliyordu**; boundary'de
 `wr_*` load portu eklenerek kapatıldı (ADR-011 ek maddesi).
 
+### Tile sayısı tutarsızlığı kapandı: 112, 98 değil
+
+Yukarıdaki ölçüm tablosu conv1'i 98 tile olarak sayıyor; `tb_conv1_top` 2026-10-07'de
+`tile_count = 112` ölçtü ve ikisi de doğru, farklı şeyi sayıyorlar. 98 = `ceil(784/8)`,
+yani output pozisyonlarının satır sınırını aşarak paketlendiği ideal. Gerçek `window_gen`
+**satır sınırlı**: her output satırı kendi içinde `8/8/8/4` olarak bölünüyor, `28 × 4 = 112`.
+Aynı sebeple conv2 26 değil `10 × 2 × 2 = 40`. Fark, her satırın son tile'ının partial
+olmasıdır — `active_cols = 4` ile çalışan tile boş MAC slotu harcar. Bu, ADR-002'nin tile
+tablosuna not olarak yazıldı; paketlenmiş sayıya ulaşmak pencerenin satır geometrisini
+bozmak demek olduğu için schedule değiştirilmiyor.
+
 `conv1_top` (window_gen + layer_ctrl + weight_feeder + compute_engine + requant_array)
 2026-10-07'de XSim'de uçtan uca **bit-exact** doğrulandı: `T_CONV1_E2E_001`, 112 tile,
 784 output beat ve 784 INT32 accumulator beat, iki farklı backpressure deseniyle iki kez.

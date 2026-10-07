@@ -190,19 +190,17 @@ BRAM yerine flip-flop çıkarıyor.
   istediği `C_LOGICAL`/`C_PHYS_STRIDE` ayrımıyla aynı dosyaya dokunuyor. Karşılaştırma için:
   compute core tek başına WNS +3,074 ns, `requant_array` +3,380 ns — ihlal tamamen yeni
   entegre edilen window yolunda.
-- **Ağırlık bellek yolu sentezde yok.** `weight_feeder`'ın sekiz bankasının ne
-  initialization'ı ne write port'u var; sentez bunu sabit bellek görüp **tamamen optimize
-  ediyor** (`u_weights` netlist'te hiç görünmüyor, 2026-10-07 ölçümü). Simülasyon yeşil
-  çünkü testbench bankaları hiyerarşik `$readmemh` ile dolduruyor — yani bu, "sim geçiyor,
-  donanım saçmalıyor" sınıfının tam örneği. [[ADR-011 Ağırlık Bellek Adresleme|ADR-011]]
-  bankaları katman başına sekiz `.coe` dosyasıyla Block Memory Generator'dan yüklemeyi
-  söylüyor; o yol RTL'de henüz yok. `check_synth_conv1.tcl` bunu bilerek bir kapı olarak
-  tutuyor. Boundary'ye `w_wr_*` load portu eklendi (2026-10-07) — bankalar artık silinmiyor
-  ama **BRAM de çıkmıyor**: Vivado iki boyutlu `bank_mem`'i 524.288 register olarak
-  çıkarmaya kalkıyor (`Synth 8-11357`), ki xc7z020'de 106.400 FF var. Kapatmak için ya
-  sekiz `.coe` + Block Memory Generator IP'si, ya da her bankayı generate içinde ayrı tek
-  boyutlu dizi yapıp senkron okumak gerekiyor; hangisi olduğuna karar verilmeli
-  ([[ADR-011 Ağırlık Bellek Adresleme|ADR-011]] ek maddesi).
+- **Ağırlık bankaları artık BRAM — kapandı 2026-10-07.** Önceki hâlinde bankaların ne
+  initialization'ı ne write port'u vardı, sentez onları sabit bellek sayıp **tamamen
+  optimize ediyordu** (`u_weights` utilization raporunda hiç görünmüyordu) — simülasyon
+  yeşildi çünkü testbench bankaları hiyerarşik dolduruyordu, yani "sim geçiyor, donanımda
+  ağırlık yok" sınıfı. Üç adımda çözüldü: boundary'ye `w_wr_*` load portu
+  ([[ADR-011 Ağırlık Bellek Adresleme|ADR-011]] preload'unun RTL karşılığı, ADR-012'nin de
+  kancası); iki boyutlu dizinin BRAM inference'a girmediğinin ölçülmesi
+  (`Synth 8-11357`, 524.288 register); ve belleğin banka başına ayrı tek boyutlu diziye
+  (`g_bank[r].bank_mem`) senkron okumayla taşınması. Ölçüm: **RAMB36 = 16**, banka başına
+  tam 2. Testbench'ler bankaları artık `wr_*` portundan yüklüyor, yani yükleme yolu da
+  test ediliyor.
 - **`line_buffer` BRAM çıkarmıyor.** `ram_style = "block"` bir öneri, garanti değil:
   bellek kombinasyonel okunduğu için sentez flip-flop üretiyor. Ölçüm (2026-10-07):
   `line_buffer` tek başına **3951 LUT + 3985 FF, 0 BRAM**, ve `conv1_top` toplamı 10947 LUT

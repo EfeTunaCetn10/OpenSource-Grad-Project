@@ -141,23 +141,38 @@ doğrudan okuyacaksa doğru transform `reshape(120,2,8,5,5).permute(0,1,3,4,2)`'
 ağırlık export'u değişmiyor; bu ADR'nin `k = ci*(kH*kW) + kh*kW + kw` reduction order'ı ve
 "conv'da permütasyon yok" vaadi aynen geçerli.
 
-### 2026-10-07 ikinci ölçüm: write port yetti ama BRAM hâlâ çıkmıyor
+### 2026-10-07: preload yolu kapandı, bankalar gerçekten BRAM
 
-Boundary'ye `wr_*` load portu eklenince bankalar artık silinmiyor — ama Vivado onları
-**BRAM değil register** olarak çıkarıyor: `WARNING: [Synth 8-11357] Potential Runtime issue
-for 3D-RAM ... bank_mem_reg with 524288 registers`. Yani `logic [7:0] bank_mem [0:ROWS-1]
-[0:DEPTH-1]` şeklindeki iki boyutlu dizi bu araçta BRAM inference'a girmiyor
-(8 × 8192 × 8 = 524.288 bit, xc7z020'nin toplam FF'i 106.400 — fiziksel olarak imkânsız).
+Üç adımda çözüldü ve her adım ölçüldü:
 
-İki kapatma yolu var ve **önce hangisi olduğuna karar verilmeli**, çünkü ikisi farklı kod
-üretir:
+1. **Write port.** Bankaların ne initialization'ı ne write port'u olduğu için sentez onları
+   sabite indirip siliyordu. `weight_feeder`'a ve `conv1_top`'un boundary'sine `wr_*` load
+   portu eklendi (`wr_en`, `wr_bank`, `wr_addr`, `wr_data`). Bu aynı zamanda `ADR-012`
+   çalışma zamanında ağırlık yükleme kararının kancasıdır.
+2. **Write port yetmedi.** Bankalar silinmeyi bıraktı ama Vivado 2025.1 iki boyutlu
+   `bank_mem [0:ROWS-1][0:DEPTH-1]` dizisini BRAM inference'a sokmuyor:
+   `WARNING: [Synth 8-11357] Potential Runtime issue for 3D-RAM ... bank_mem_reg with
+   524288 registers`. 8 × 8192 × 8 bit = 524.288 bit, xc7z020'de 106.400 FF var.
+3. **Banka başına ayrı dizi.** Bellek generate bloğuna taşındı: `g_bank[r].bank_mem
+   [0:DEPTH-1]`, banka başına tek boyutlu dizi, senkron okuma, register'lanmış çıkış.
+   Ölçüm: **RAMB36 = 16**, yani banka başına tam 2 RAMB36 — bu ADR'nin sekiz fiziksel
+   bankasının birebir karşılığı. Regression 10/10 PASS, davranış değişmedi.
 
-- **(a) Block Memory Generator IP'si + sekiz `.coe`** — bu ADR'nin baştan dediği. `bank_mem`
-  RTL'den tamamen çıkar, yerine sekiz BMG instance gelir. Ağırlık bitstream'e gömülü kalır.
-- **(b) Inferred RTL** — her bankayı generate içinde ayrı tek boyutlu dizi yapmak
-  (`g_bank[r].mem [0:DEPTH-1]`), senkron okuma, ve initialization'ı `$readmemh` ile vermek.
-  BRAM inference'ın klasik kalıbı bu; `wr_*` portu ADR-012 için zaten yerinde kalır.
+Bu yapı ADR-011'in `.coe` + Block Memory Generator kararını **geçersiz kılmıyor**, onun
+inferred karşılığı. Sekiz BMG instance'ı tam olarak bu generate bloğunun yerine girer;
+adresleme, banking ve port kontratı aynı kalır. Fark yalnız ağırlığın nereden geldiğidir:
+şu an `wr_*` portundan (Aşama 1'de testbench, sonra AXI), BMG'de bitstream'den. Bitstream'e
+gömülü ağırlık hedefi korunuyorsa ya sekiz `.coe` ile BMG, ya da generate içinde
+`$readmemh` initialization eklenmeli; ikisi de bu dosyada tek yere dokunur.
 
-(b) daha az IP bağımlılığı demek ve `tb_weight_feeder`'ın hiyerarşik yükleme yolunu
-koruyabilir (yalnız yol adı `bank_mem[r][a]` → `g_bank[r].mem[a]` olarak değişir). (a) ise
-ADR-011'in yazılı kararına birebir uyar. Karar verilmeden ikisini de yazmak israf.
+**Testbench'ler artık bankaları hiyerarşik olarak doldurmuyor**, `wr_*` portundan yüklüyor.
+İki kazanç: yükleme yolu da test edilmiş oluyor, ve generate dizisine hiyerarşik referans
+sabit index gerektirdiği için (XSim: `'bank_mem' is not declared under prefix 'g_bank'`)
+döngü değişkeniyle poke etmek zaten mümkün değil.
+
+**FC1 uyarısı güncellendi:** yukarıdaki 2026-09-25 ek maddesi FC1 için
+`reshape(120,16,5,5).permute(0,2,3,1)` diyor. [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]]
+2026-10-07'de ara tamponu **padded tile-major** olarak kilitlediği için FC1 fiziksel sırayı
+doğrudan okuyacaksa doğru transform `reshape(120,2,8,5,5).permute(0,1,3,4,2)`'dir. Conv
+ağırlık export'u değişmiyor; bu ADR'nin `k = ci*(kH*kW) + kh*kW + kw` reduction order'ı ve
+"conv'da permütasyon yok" vaadi aynen geçerli.
