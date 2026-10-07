@@ -211,7 +211,7 @@ module tb_window_gen;
                             $display("FAIL c2 byte row=%0d x=%0d k=%0d lane=%0d got=%h exp=%h", c2_row, c2_x, c2_k, lane,
                                      c2_md[lane*8 +: 8], c2_expected(c2_row, c2_x, c2_k, lane));
                             if (c2_row == 0 && c2_k == 0 && lane == 0)
-                                $display("DEBUG c2 bytes bank0 addr0=%h bank5 addr3=%h", u_c2.u_line_buffer.byte_mem[0][0], u_c2.u_line_buffer.byte_mem[5][3]);
+                                $display("DEBUG c2 bytes bank0 addr0=%h bank5 addr3=%h", u_c2.u_line_buffer.g_bank[0].bank_mem[0], u_c2.u_line_buffer.g_bank[5].bank_mem[3]);
                             errors = errors + 1;
                         end
                     out_n = out_n + 1;

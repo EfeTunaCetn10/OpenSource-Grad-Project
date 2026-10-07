@@ -8,11 +8,9 @@
 // compute_engine's B-top activation edge.  The final tile of a row reports
 // only its real columns in m_active_cols and zeroes all inactive lanes.
 //
-// A gather takes eight line-buffer reads (one pixel per cycle), then presents
-// one 64-bit activation beat.  The line buffer has eight banks with one read
-// port each; the gather therefore needs one read port per cycle, never more
-// than two per memory.  It also means overlapping adjacent windows share the
-// same K_H-row ring and do not require eight independent windows.
+// A gather issues eight line-buffer reads (one pixel per cycle) and captures
+// each registered result on the following cycle, then presents one 64-bit
+// activation beat.  The extra response cycle is contained entirely here.
 //
 // PAD is retained as a parameter and zero padding is generated for coordinates
 // outside the input frame.  The Stage-1 contract is PAD=0; a production
@@ -50,8 +48,30 @@ module window_gen #(
     localparam int OUT_W = ((IN_W + 2*PAD - K_W) / STRIDE) + 1;
     localparam int OUT_H = ((IN_H + 2*PAD - K_H) / STRIDE) + 1;
     localparam int K_LEN = C_IN * K_H * K_W;
-    localparam int ROW_W = (IN_H < 1) ? 1 : $clog2(IN_H+1);
-    localparam int COL_W = (IN_W < 1) ? 1 : $clog2(IN_W+1);
+
+    localparam int ROW_W       = (IN_H < 1) ? 1 : $clog2(IN_H+1);
+    localparam int COL_W       = (IN_W < 1) ? 1 : $clog2(IN_W+1);
+    localparam int OUT_Y_W     = (OUT_H <= 1) ? 1 : $clog2(OUT_H);
+    localparam int TILE_X_W    = (OUT_W <= 1) ? 1 : $clog2(OUT_W);
+    localparam int K_COUNT_W   = (K_LEN <= 1) ? 1 : $clog2(K_LEN);
+    localparam int CI_W        = (C_IN <= 1) ? 1 : $clog2(C_IN);
+    localparam int KH_W        = (K_H <= 1) ? 1 : $clog2(K_H);
+    localparam int KW_W        = (K_W <= 1) ? 1 : $clog2(K_W);
+    localparam int CH_W        = (C_IN < 1) ? 1 : $clog2(C_IN+1);
+    localparam int ROW_COORD_W = $clog2(IN_H + 2*PAD + K_H + STRIDE + 2) + 1;
+    localparam int COL_COORD_W = $clog2(IN_W + 2*PAD + K_W + 8*STRIDE + 2) + 1;
+
+    localparam logic [OUT_Y_W-1:0]   LAST_OUT_Y  = OUT_H - 1;
+    localparam logic [TILE_X_W-1:0]  OUT_W_VALUE = OUT_W;
+    localparam logic [K_COUNT_W-1:0] LAST_K       = K_LEN - 1;
+    localparam logic [CI_W-1:0]      LAST_CI      = C_IN - 1;
+    localparam logic [KH_W-1:0]      LAST_KH      = K_H - 1;
+    localparam logic [KW_W-1:0]      LAST_KW      = K_W - 1;
+    localparam logic signed [ROW_COORD_W-1:0] NEG_ONE = -1;
+    localparam logic signed [ROW_COORD_W-1:0] ROW_STRIDE = STRIDE;
+    localparam logic signed [ROW_COORD_W-1:0] KH_OFFSET = K_H - 1;
+    localparam logic signed [COL_COORD_W-1:0] COL_STRIDE = STRIDE;
+    localparam logic signed [COL_COORD_W-1:0] TILE_SOURCE_STEP = 8*STRIDE;
 
     typedef enum logic [2:0] {ST_INPUT, ST_READ, ST_OUTPUT, ST_DONE} state_t;
     state_t state;
@@ -64,7 +84,7 @@ module window_gen #(
     logic lb_rd_en;
     logic [ROW_W-1:0] lb_rd_row;
     logic [COL_W-1:0] lb_rd_col;
-    logic [$clog2(C_IN+1)-1:0] lb_rd_ch;
+    logic [CH_W-1:0] lb_rd_ch;
     logic lb_rd_valid;
     logic [DATA_WIDTH-1:0] lb_rd_byte;
 
@@ -81,8 +101,8 @@ module window_gen #(
         .resume_write (resume_write),
         .s_valid      (s_valid),
         .s_ready      (s_ready),
-        .s_data      (s_data),
-        .s_last      (s_last),
+        .s_data       (s_data),
+        .s_last       (s_last),
         .write_busy   (lb_write_busy),
         .rows_written (rows_written),
         .frame_done   (lb_frame_done),
@@ -94,130 +114,204 @@ module window_gen #(
         .rd_byte      (lb_rd_byte)
     );
 
-    integer out_y;
-    integer tile_x;
-    integer k_count;
-    integer gather_lane;
-    integer ci_index;
-    integer kh_index;
-    integer kw_index;
-    integer source_row;
-    integer source_col;
-    integer bottom_row;
-    integer active_count;
+    logic [OUT_Y_W-1:0]   out_y;
+    logic [TILE_X_W-1:0]  tile_x;
+    logic [K_COUNT_W-1:0] k_count;
+    logic [CI_W-1:0]      ci_count;
+    logic [KH_W-1:0]      kh_count;
+    logic [KW_W-1:0]      kw_count;
+
+    logic [3:0]  gather_issue_lane;
+    logic [2:0]  gather_capture_lane;
+    logic        gather_capture_pending;
+    logic        gather_capture_from_lb;
     logic [63:0] gather_reg;
 
+    logic [3:0] active_count;
+    logic [TILE_X_W-1:0] remaining_cols;
+    logic signed [ROW_COORD_W-1:0] out_base_row;
+    logic signed [COL_COORD_W-1:0] tile_base_col;
+    logic signed [ROW_COORD_W-1:0] rows_written_coord;
+    logic signed [ROW_COORD_W-1:0] kh_coord;
+    logic signed [COL_COORD_W-1:0] kw_coord;
+    logic signed [COL_COORD_W-1:0] lane_coord;
+    logic signed [ROW_COORD_W-1:0] source_row;
+    logic signed [COL_COORD_W-1:0] source_col;
+    logic signed [ROW_COORD_W-1:0] bottom_row;
+    logic rows_ready;
+
     always_comb begin
+        remaining_cols = OUT_W_VALUE - tile_x;
+        if (remaining_cols > 8)
+            active_count = 4'd8;
+        else
+            active_count = remaining_cols;
+
+        rows_written_coord = '0;
+        rows_written_coord[ROW_W-1:0] = rows_written;
+        kh_coord = '0;
+        kh_coord[KH_W-1:0] = kh_count;
+        kw_coord = '0;
+        kw_coord[KW_W-1:0] = kw_count;
+        lane_coord = '0;
+        lane_coord[3:0] = gather_issue_lane;
+
+        bottom_row = out_base_row + KH_OFFSET;
+        source_row = out_base_row + kh_coord;
+        source_col = tile_base_col + kw_coord + (lane_coord * COL_STRIDE);
+
+        rows_ready = !lb_write_busy && (bottom_row >= NEG_ONE) &&
+                     (rows_written_coord > bottom_row);
         allow_input = (state == ST_INPUT);
-        bottom_row = out_y*STRIDE - PAD + K_H - 1;
         resume_write = 1'b0;
-        if ((state == ST_INPUT) && !lb_write_busy &&
-            (bottom_row >= -1) && (int'(rows_written) > bottom_row) &&
-            (out_y < OUT_H))
+        if ((state == ST_INPUT) && rows_ready)
             allow_input = 1'b0;
         else if (state == ST_INPUT)
             resume_write = 1'b1;
+
         m_valid = (state == ST_OUTPUT);
         m_data = gather_reg;
+        m_active_cols = active_count;
         m_k = k_count;
         m_tile_row = out_y;
         m_tile_x = tile_x;
-        active_count = OUT_W - tile_x;
-        if (active_count > 8)
-            active_count = 8;
-        if (active_count < 0)
-            active_count = 0;
-        m_active_cols = active_count[3:0];
-        m_tile_start = (state == ST_OUTPUT) && (k_count == 0);
-        m_tile_last = (state == ST_OUTPUT) && (k_count == K_LEN-1);
+        m_tile_start = (state == ST_OUTPUT) && (k_count == '0);
+        m_tile_last = (state == ST_OUTPUT) && (k_count == LAST_K);
         done = (state == ST_DONE);
-
-        ci_index = k_count / (K_H*K_W);
-        kh_index = (k_count / K_W) % K_H;
-        kw_index = k_count % K_W;
-        source_row = out_y*STRIDE - PAD + kh_index;
-        source_col = tile_x*STRIDE - PAD + kw_index + gather_lane*STRIDE;
 
         lb_rd_en = 1'b0;
         lb_rd_row = '0;
         lb_rd_col = '0;
         lb_rd_ch = '0;
-        if (state == ST_READ && (gather_lane < active_count) &&
+        if ((state == ST_READ) && (gather_issue_lane < 8) &&
+            (gather_issue_lane < active_count) &&
             (source_row >= 0) && (source_row < IN_H) &&
             (source_col >= 0) && (source_col < IN_W)) begin
             lb_rd_en = 1'b1;
             lb_rd_row = source_row[ROW_W-1:0];
             lb_rd_col = source_col[COL_W-1:0];
-            lb_rd_ch = ci_index[$clog2(C_IN+1)-1:0];
+            lb_rd_ch = ci_count;
         end
     end
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            state       <= ST_INPUT;
-            out_y       <= 0;
-            tile_x      <= 0;
-            k_count     <= 0;
-            gather_lane <= 0;
-            gather_reg  <= '0;
+            state                   <= ST_INPUT;
+            out_y                   <= '0;
+            tile_x                  <= '0;
+            k_count                 <= '0;
+            ci_count                <= '0;
+            kh_count                <= '0;
+            kw_count                <= '0;
+            gather_issue_lane       <= '0;
+            gather_capture_lane     <= '0;
+            gather_capture_pending  <= 1'b0;
+            gather_capture_from_lb  <= 1'b0;
+            gather_reg              <= '0;
+            out_base_row            <= -PAD;
+            tile_base_col           <= -PAD;
         end else begin
             case (state)
                 ST_INPUT: begin
                     // A row can finish in the middle of an AXIS beat.  The
-                    // line buffer keeps write_busy asserted until all eight
-                    // bytes have landed, so no partially-written row is read.
-                    if (!lb_write_busy && (bottom_row >= -1) &&
-                        (int'(rows_written) > bottom_row) &&
-                        (out_y < OUT_H)) begin
-                        tile_x      <= 0;
-                        k_count     <= 0;
-                        gather_lane <= 0;
-                        gather_reg  <= '0;
-                        state       <= ST_READ;
+                    // line buffer keeps write_busy asserted until all bytes
+                    // before the boundary have landed; row_pause then keeps
+                    // the rest of that beat from overwriting the ring.
+                    if (rows_ready) begin
+                        tile_x                 <= '0;
+                        k_count                <= '0;
+                        ci_count               <= '0;
+                        kh_count               <= '0;
+                        kw_count               <= '0;
+                        gather_issue_lane      <= '0;
+                        gather_capture_pending <= 1'b0;
+                        gather_capture_from_lb <= 1'b0;
+                        gather_reg             <= '0;
+                        tile_base_col          <= -PAD;
+                        state                  <= ST_READ;
                     end
                 end
 
                 ST_READ: begin
-                    if ((gather_lane < active_count) && lb_rd_valid)
-                        gather_reg[gather_lane*DATA_WIDTH +: DATA_WIDTH]
-                            <= lb_rd_byte;
-                    else
-                        gather_reg[gather_lane*DATA_WIDTH +: DATA_WIDTH] <= '0;
+                    // Capture the preceding cycle's synchronous RAM result.
+                    // Metadata advances with every lane, including padding,
+                    // so invalid and inactive positions are explicitly zero.
+                    if (gather_capture_pending) begin
+                        if (gather_capture_from_lb && lb_rd_valid)
+                            gather_reg[gather_capture_lane*DATA_WIDTH +: DATA_WIDTH]
+                                <= lb_rd_byte;
+                        else
+                            gather_reg[gather_capture_lane*DATA_WIDTH +: DATA_WIDTH]
+                                <= '0;
+                    end
 
-                    if (gather_lane == 7) begin
-                        gather_lane <= 0;
-                        state <= ST_OUTPUT;
+                    if (gather_issue_lane < 8) begin
+                        gather_capture_lane    <= gather_issue_lane[2:0];
+                        gather_capture_pending <= 1'b1;
+                        gather_capture_from_lb <= lb_rd_en;
+                        gather_issue_lane      <= gather_issue_lane + 1'b1;
                     end else begin
-                        gather_lane <= gather_lane + 1;
+                        gather_capture_pending <= 1'b0;
+                        gather_capture_from_lb <= 1'b0;
+                        if (gather_capture_pending) begin
+                            gather_issue_lane <= '0;
+                            state <= ST_OUTPUT;
+                        end
                     end
                 end
 
                 ST_OUTPUT: begin
                     if (m_ready) begin
-                        if (k_count == K_LEN-1) begin
-                            if (tile_x + 8 >= OUT_W) begin
-                                if (out_y + 1 >= OUT_H) begin
+                        if (k_count == LAST_K) begin
+                            if (remaining_cols <= 8) begin
+                                if (out_y == LAST_OUT_Y) begin
                                     state <= ST_DONE;
                                 end else begin
-                                    out_y       <= out_y + 1;
-                                    tile_x      <= 0;
-                                    k_count     <= 0;
-                                    gather_lane <= 0;
-                                    gather_reg  <= '0;
-                                    state       <= ST_INPUT;
+                                    out_y                   <= out_y + 1'b1;
+                                    tile_x                  <= '0;
+                                    k_count                 <= '0;
+                                    ci_count                <= '0;
+                                    kh_count                <= '0;
+                                    kw_count                <= '0;
+                                    gather_issue_lane       <= '0;
+                                    gather_capture_pending  <= 1'b0;
+                                    gather_capture_from_lb  <= 1'b0;
+                                    gather_reg              <= '0;
+                                    out_base_row            <= out_base_row + ROW_STRIDE;
+                                    tile_base_col           <= -PAD;
+                                    state                   <= ST_INPUT;
                                 end
                             end else begin
-                                tile_x      <= tile_x + 8;
-                                k_count     <= 0;
-                                gather_lane <= 0;
-                                gather_reg  <= '0;
-                                state       <= ST_READ;
+                                tile_x                  <= tile_x + 8;
+                                k_count                 <= '0;
+                                ci_count                <= '0;
+                                kh_count                <= '0;
+                                kw_count                <= '0;
+                                gather_issue_lane       <= '0;
+                                gather_capture_pending  <= 1'b0;
+                                gather_capture_from_lb  <= 1'b0;
+                                gather_reg              <= '0;
+                                tile_base_col           <= tile_base_col + TILE_SOURCE_STEP;
+                                state                   <= ST_READ;
                             end
                         end else begin
-                            k_count     <= k_count + 1;
-                            gather_lane <= 0;
-                            gather_reg  <= '0;
-                            state       <= ST_READ;
+                            k_count <= k_count + 1'b1;
+                            if (kw_count == LAST_KW) begin
+                                kw_count <= '0;
+                                if (kh_count == LAST_KH) begin
+                                    kh_count <= '0;
+                                    ci_count <= ci_count + 1'b1;
+                                end else begin
+                                    kh_count <= kh_count + 1'b1;
+                                end
+                            end else begin
+                                kw_count <= kw_count + 1'b1;
+                            end
+                            gather_issue_lane      <= '0;
+                            gather_capture_pending <= 1'b0;
+                            gather_capture_from_lb <= 1'b0;
+                            gather_reg             <= '0;
+                            state                  <= ST_READ;
                         end
                     end
                 end
@@ -230,4 +324,21 @@ module window_gen #(
             endcase
         end
     end
+
+    property p_kernel_counters_in_range;
+        @(posedge clk) disable iff (!rst_n)
+        (ci_count <= LAST_CI) && (kh_count <= LAST_KH) &&
+        (kw_count <= LAST_KW) && (k_count <= LAST_K);
+    endproperty
+    a_kernel_counters_in_range: assert property (p_kernel_counters_in_range);
+
+    property p_read_response_matches_request;
+        @(posedge clk) disable iff (!rst_n)
+        (state == ST_READ && gather_capture_pending && gather_capture_from_lb)
+        |-> lb_rd_valid;
+    endproperty
+    a_read_response_matches_request: assert property (p_read_response_matches_request);
+
+    logic unused_lb_frame_done;
+    always_comb unused_lb_frame_done = lb_frame_done;
 endmodule

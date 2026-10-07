@@ -325,34 +325,56 @@ kabul ediliyor ve activation gate CLEAR cycle'ı geçtikten sonra açılıyor �
 kaybolmuyor. Satır grubu sınırı kabul edilen beat sayacıyla belirleniyor, `w_k` ile değil.
 Sözleşme `layer_ctrl`'ün port listesi ve sekiz bitlik `error_flags` ataması olarak yazılı.
 
-### İlk entegrasyon STA'sı — 100 MHz kapanmıyor, sebebi window yolu
+### İlk entegrasyon STA'sı: −33,3 ns ile başladı, +1,2 ns ile kapandı
 
 `vivado/check_synth_conv1.tcl` (yeni, conv1 entegrasyon kapısı) 2026-10-07'de ilk kez
-`conv1_top`'u sentezledi. Sonuç: **80 DSP48 doğru** (64 PE + 16 requant) ama
-**WNS −33,324 ns @ 100 MHz**, 3935 failing endpoint, TNS −112.987 ns.
+`conv1_top`'u sentezledi ve **WNS −33,324 ns** verdi: 3935 failing endpoint, TNS
+−112.987 ns, kritik yol `u_window/k_count_reg[0]` → PE accumulator, **67 logic level,
+38 CARRY4, 42,790 ns**. Karşılaştırma: compute core tek başına +3,074 ns, `requant_array`
++3,380 ns — ihlalin tamamı daha önce hiç sentezlenmemiş window yolundaydı.
 
-Kritik yol `u_window/k_count_reg[0]` → `u_engine/u_array/g_row[0].g_col[0].u_pe/acc_reg`:
-**67 logic level, 38 CARRY4, 42,790 ns** (logic 20,461 ns / route 22,329 ns). Üç sebep
-üst üste biniyor:
+Üç sebep vardı:
 
-1. `window_gen` `ci_index`, `kh_index`, `kw_index` değerlerini `k_count`'tan **kombinasyonel
-   32-bit bölme ve modulo** ile üretiyor. 38 CARRY4'ün kaynağı bu. `k_count` ardışık
-   arttığı için bölmeye hiç gerek yok — ci/kh/kw sayaçları aynı değerleri üretir.
-2. `line_buffer` kombinasyonel okunuyor (aşağıdaki BRAM maddesi), yani bellek okuması da
-   aynı path'in içinde.
-3. Activation yolu `layer_ctrl`'de bilinçli pass-through, dolayısıyla gather çıkışı ile PE
-   girişi arasında register yok.
+1. `window_gen` `ci`/`kh`/`kw` indekslerini `k_count`'tan **kombinasyonel 32-bit bölme ve
+   modulo** ile üretiyordu (K_H=K_W=5, yani gerçek divider). 38 CARRY4'ün kaynağı buydu ve
+   gereksizdi: `k_count` ardışık arttığı için üç iç içe sayaç aynı eşlemeyi bir adder ve bir
+   karşılaştırmayla veriyor. Aynı kalıp `line_buffer`'ın write tarafında da vardı
+   (`frame_byte_count / ROW_BYTES`, ROW_BYTES=96, ikinin kuvveti değil).
+2. `line_buffer` **kombinasyonel okunuyordu**, yani bellek okuması dividerlarla aynı
+   kombinasyonel koninin içindeydi ve `ram_style = "block"` hiçbir zaman uygulanamıyordu.
+3. Değerler `integer` (32 bit) temporaries içinde taşınıyordu; gerçek aralıklar 6-13 bit.
 
-Üçü birlikte düzeltilmeli, çünkü `line_buffer`'ı senkron okumaya çevirmek bu ADR'nin
-istediği `C_LOGICAL` / `C_PHYS_STRIDE` ayrımıyla aynı dosyaya dokunuyor. Karşılaştırma:
-compute core tek başına +3,074 ns, `requant_array` +3,380 ns — ihlal tamamen yeni entegre
-edilen window yolunda, daha önce sentezlenmemiş koddan geliyor.
+Düzeltme iki turda yapıldı ve her tur ölçüldü:
 
-Aynı koşunun ikinci bulgusu: `line_buffer` BRAM değil **flip-flop** çıkarıyor (3951 LUT +
-3985 FF, 0 BRAM). `ram_style = "block"` bir öneri; kombinasyonel okuma BRAM'i imkânsız
-kılıyor. Üçüncü bulgusu: `weight_feeder`'ın bankaları ne initialization ne write port'a
-sahip olduğu için sentez onları sabite indirip **tamamen siliyordu**; boundary'de
-`wr_*` load portu eklenerek kapatıldı (ADR-011 ek maddesi).
+| Adım | WNS | `conv1_top` LUT / FF |
+|---|---:|---:|
+| Bulunduğu hâl | −33,324 ns | 10947 / 7476 |
+| Bölme/modulo → sayaç, senkron okuma, doğru genişlikler | +0,075 ns | 6681 / 7825 |
+| Ring'i banka başına ayrı tek boyutlu diziye taşı | **+1,203 ns** | **5013 / 4033** |
+
+İkinci adım şart oldu çünkü +0,075 ns pay bir kapıyı geçer ama implementation'ı geçmez;
+o turun kritik yolu `out_base_row` → `line_buffer/rd_byte` idi, 9,918 ns'nin **7,38 ns'si
+routing**, logic yalnız 2,538 ns. Sebep belliydi: ring hâlâ iki boyutlu dizi olduğu için
+RAM değil flip-flop + mux koni olarak kuruluyordu. Banka başına ayrı diziye alınınca
+`line_buffer` 3951 LUT + 3985 FF → **314 LUT + 169 FF + 96 LUTRAM**, `window_gen` 6148 →
+**347 LUT**. `ram_style` bilinçli olarak `distributed`: ring K_H satır, yani conv1'de 480
+byte, padded conv2 girişinde 560 byte — banka başına 60-70 entry. RAMB18 18 Kb tutar;
+block RAM burada yanlış alet, ağırlık bankalarında (banka başına 8192 entry) doğru alet.
+
+Kritik yol artık window yolunda değil: `u_ctrl/cfg_k_reg` → `u_weights/beats_accepted/CE`,
+8,544 ns, 10 logic level, route %61,9. Yani sıradaki limiter `layer_ctrl` → `weight_feeder`
+komut yolu.
+
+**Bedeli, saklanmadan:** senkron okuma gather'ı aktivasyon beat'i başına dokuz cycle'dan
+on cycle'a çıkardı. `tb_conv1_top` ölçümü 76.944 → **85.232 engine cycle** (+%10,8), yani
+conv1 frame'i 100 MHz'de **852 µs**. Bu, çalışma kitabının B34'teki 756 µs alt sınırını
+ölçümle doğruluyor ve asıl darboğazın array değil generator olduğunu gösteriyor: 8400
+beat × 10 cycle, array ise cycle başına bir beat yutabiliyor. Hızlandırma yolu gather'ı
+sekiz bankadan paralel okumak (ring zaten sekiz banka), Aşama 2'ye bırakıldı.
+
+**Not:** sentez kapısı yerleşmemiş netlist üzerinde tahmin verir. Post-route setup *ve*
+hold için `vivado/check_impl_conv1.tcl` yazıldı; "100 MHz kapandı" iddiası onun PASS'ine
+bağlı.
 
 ### Tile sayısı tutarsızlığı kapandı: 112, 98 değil
 

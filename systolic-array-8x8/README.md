@@ -168,28 +168,50 @@ vivado -mode batch -source vivado\check_synth_conv1.tcl
 ```
 
 Bu kapı `conv1_top`'u sentezler, 80 DSP48 (64 PE + 16 requant) ve negatif olmayan WNS
-arar, bellek realizasyonunu raporlar ve **ağırlık yolunun netlist'te hayatta kaldığını**
-kontrol eder. Son ölçüm (2026-10-07) üzerinde iki gerçek bulgu var, aşağıdaki
-"Bilinen sınırlar" maddelerine bakın: ağırlık bankaları optimize ediliyor ve `line_buffer`
-BRAM yerine flip-flop çıkarıyor.
+arar, bellek realizasyonunu raporlar ve ağırlık bankalarının gerçekten block RAM olarak
+kurulduğunu kontrol eder (instance'ın var olması yetmez — boş kabuk da sayılır).
+
+Son ölçüm (2026-10-07, Vivado 2025.1, xc7z020clg400-1, 100 MHz): **PASS** —
+80 DSP48, 16 RAMB36, **WNS +1,203 ns**, 5013 LUT / 4033 FF.
+Kritik yol artık `u_ctrl/cfg_k_reg` → `u_weights/beats_accepted/CE`, 8,544 ns,
+10 logic level (route %61,9).
+
+Buraya nasıl gelindiği kayda değer, çünkü ilk entegrasyon STA'sı **WNS −33,324 ns**
+vermişti (3935 failing endpoint, TNS −112.987 ns; kritik yol `u_window/k_count` → PE
+accumulator, 67 logic level / 38 CARRY4 / 42,790 ns). Üç sebep vardı ve üçü de daha önce
+hiç sentezlenmemiş kodda:
+
+| Düzeltme | WNS | `conv1_top` LUT / FF |
+|---|---:|---:|
+| İlk entegrasyon (bulunduğu hâl) | −33,324 ns | 10947 / 7476 |
+| `window_gen` bölme/modulo → sayaç, `line_buffer` senkron okuma | +0,075 ns | 6681 / 7825 |
+| `line_buffer` ring'i banka başına ayrı diziye | **+1,203 ns** | **5013 / 4033** |
+
+`window_gen` tek başına 6148 → **347 LUT**, `line_buffer` 3951 LUT + 3985 FF →
+**314 LUT + 169 FF + 96 LUTRAM**. 32-bit `integer` aritmetiği ve iki boyutlu bellek
+dizileri bu tasarımda ölçülebilir bedel: ilki CARRY4 zinciri, ikincisi RAM yerine
+flip-flop.
+
+Tam implementation (opt/place/phys_opt/route + post-route setup ve hold):
+
+```powershell
+vivado -mode batch -source vivado\check_impl_conv1.tcl
+```
 
 ## Bilinen sınırlar
 
-- **Entegrasyon 100 MHz'i kapatmıyor — WNS −33,324 ns (2026-10-07, ilk entegrasyon STA'sı).**
-  Kritik yol `u_window/k_count_reg[0]` → `u_engine/u_array/g_row[0].g_col[0].u_pe/acc_reg`:
-  **67 logic level, 38 CARRY4, 42,790 ns** (logic 20,461 / route 22,329). 3935 failing
-  endpoint, TNS −112.987 ns, yani tek bir path değil yapısal bir sorun. Üç sebep üst üste
-  biniyor ve üçü de daha önce hiç sentezlenmemiş kodda:
-  1. `window_gen` indeksleri `k_count`'tan **kombinasyonel 32-bit `/` ve `%`** ile üretiyor
-     (`ci_index = k_count / (K_H*K_W)`, `kh_index`, `kw_index`) — 38 CARRY4'ün kaynağı bu.
-     `k_count` ardışık arttığı için bölme hiç gerekmiyor; ci/kh/kw sayaçları yeter.
-  2. `line_buffer` kombinasyonel okunuyor, yani bellek okuması aynı path'in içinde.
-  3. Activation yolu `layer_ctrl`'de bilinçli olarak pass-through (seam kontratı), dolayısıyla
-     `window_gen` gather çıkışı ile PE girişi arasında register yok.
-  Üçü aynı turda düzeltilmeli; `line_buffer`'ı senkron okumaya çevirmek zaten ADR-018'in
-  istediği `C_LOGICAL`/`C_PHYS_STRIDE` ayrımıyla aynı dosyaya dokunuyor. Karşılaştırma için:
-  compute core tek başına WNS +3,074 ns, `requant_array` +3,380 ns — ihlal tamamen yeni
-  entegre edilen window yolunda.
+- **Place & route henüz kanıt değil.** Sentez kapısı `conv1_top` için WNS **+1,203 ns**
+  veriyor ama bu yerleşmemiş netlist üzerinde bir tahmin. Gerçek kanıt
+  `vivado/check_impl_conv1.tcl` (opt/place/phys_opt/route + post-route setup *ve* hold).
+  Kapanmış sayılması için o script'in PASS vermesi gerekir.
+- **Throughput darboğazı array değil window generator.** `tb_conv1_top` ölçümü: conv1
+  frame'i **85.232 engine cycle**, yani 100 MHz'de **852 µs**. Zamanın neredeyse tamamı
+  aktivasyon beat'i başına on cycle'lık gather'da geçiyor (8400 beat × 10); 64 PE'nin
+  cycle başına bir beat yutabildiği düşünülürse array ~%10 doluluk görüyor. Senkron
+  okumaya geçiş bunu 9 cycle'dan 10'a çıkardı (+%10,8, 76.944 → 85.232), karşılığında
+  WNS −33,5 ns'den +1,2 ns'ye geldi. Hızlandırmanın yolu gather'ı sekiz bankadan paralel
+  okumaktır (ring zaten sekiz banka), ama o Aşama 2 işi ve doğruluk önce.
+
 - **Ağırlık bankaları artık BRAM — kapandı 2026-10-07.** Önceki hâlinde bankaların ne
   initialization'ı ne write port'u vardı, sentez onları sabit bellek sayıp **tamamen
   optimize ediyordu** (`u_weights` utilization raporunda hiç görünmüyordu) — simülasyon
@@ -201,11 +223,6 @@ BRAM yerine flip-flop çıkarıyor.
   (`g_bank[r].bank_mem`) senkron okumayla taşınması. Ölçüm: **RAMB36 = 16**, banka başına
   tam 2. Testbench'ler bankaları artık `wr_*` portundan yüklüyor, yani yükleme yolu da
   test ediliyor.
-- **`line_buffer` BRAM çıkarmıyor.** `ram_style = "block"` bir öneri, garanti değil:
-  bellek kombinasyonel okunduğu için sentez flip-flop üretiyor. Ölçüm (2026-10-07):
-  `line_buffer` tek başına **3951 LUT + 3985 FF, 0 BRAM**, ve `conv1_top` toplamı 10947 LUT
-  (xc7z020'nin %20'si). Senkron okumaya çevrilmesi gerekiyor; bu `window_gen`'in gather
-  FSM'ini bir cycle kaydırır, yani arayüz değişikliği değil zamanlama değişikliğidir.
 - **Ara aktivasyon tamponu yok.** Fiziksel layout 2026-10-07'de kilitlendi (padded
   tile-major, [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]] ek maddesi) ama
   address generator, ping-pong takası ve `line_buffer`'ın `C_LOGICAL`/`C_PHYS_STRIDE`
