@@ -372,9 +372,11 @@ conv1 frame'i 100 MHz'de **852 µs**. Bu, çalışma kitabının B34'teki 756 µ
 beat × 10 cycle, array ise cycle başına bir beat yutabiliyor. Hızlandırma yolu gather'ı
 sekiz bankadan paralel okumak (ring zaten sekiz banka), Aşama 2'ye bırakıldı.
 
-**Not:** sentez kapısı yerleşmemiş netlist üzerinde tahmin verir. Post-route setup *ve*
-hold için `vivado/check_impl_conv1.tcl` yazıldı; "100 MHz kapandı" iddiası onun PASS'ine
-bağlı.
+**Post-route kanıt (2026-10-07):** `vivado/check_impl_conv1.tcl` (opt/place/phys_opt/route)
+**PASS** — setup **WNS +0,920 ns**, hold **WHS +0,050 ns**, 80 DSP48, 16 RAMB36,
+4918 LUT / 4033 FF, DRC temiz. Yani bu bir sentez tahmini değil, route edilmiş netlist:
+`conv1_top` 100 MHz'i kapatıyor. Hold payı (+0,050 ns) ince; block design'a girildiğinde
+gerçek clock ağacıyla yeniden ölçülmeli, OOC run'ın clock'u idealdir.
 
 ### Tile sayısı tutarsızlığı kapandı: 112, 98 değil
 

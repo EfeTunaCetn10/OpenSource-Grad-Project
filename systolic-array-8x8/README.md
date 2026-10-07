@@ -198,12 +198,15 @@ Tam implementation (opt/place/phys_opt/route + post-route setup ve hold):
 vivado -mode batch -source vivado\check_impl_conv1.tcl
 ```
 
+Son ölçüm (2026-10-07): **PASS** — post-route setup **WNS +0,920 ns**, hold
+**WHS +0,050 ns**, 80 DSP48, 16 RAMB36, 4918 LUT / 4033 FF. DRC temiz.
+`conv1_top` 100 MHz'i gerçekten kapatıyor; bu tahmin değil route edilmiş netlist.
+
 ## Bilinen sınırlar
 
-- **Place & route henüz kanıt değil.** Sentez kapısı `conv1_top` için WNS **+1,203 ns**
-  veriyor ama bu yerleşmemiş netlist üzerinde bir tahmin. Gerçek kanıt
-  `vivado/check_impl_conv1.tcl` (opt/place/phys_opt/route + post-route setup *ve* hold).
-  Kapanmış sayılması için o script'in PASS vermesi gerekir.
+- **Hold payı ince.** Post-route setup +0,920 ns rahat, ama hold **+0,050 ns**. 100 MHz'de
+  hold tipik olarak sorun değil ve router'ın işi, ama bu sayı block design'a girdikten sonra
+  (gerçek clock ağacı, OOC değil) yeniden ölçülmeli.
 - **Throughput darboğazı array değil window generator.** `tb_conv1_top` ölçümü: conv1
   frame'i **85.232 engine cycle**, yani 100 MHz'de **852 µs**. Zamanın neredeyse tamamı
   aktivasyon beat'i başına on cycle'lık gather'da geçiyor (8400 beat × 10); 64 PE'nin
