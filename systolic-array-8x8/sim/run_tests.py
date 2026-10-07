@@ -107,27 +107,39 @@ def ascii_guard() -> None:
         )
 
 
+# Each generator is paired with one file it must produce.  Checking a per
+# generator sentinel rather than "any *.mem exists" matters: the requant
+# vectors alone used to satisfy that test, so a second generator would have
+# been skipped and its testbench would then fail on a missing file.
+VECTOR_GENERATORS = [
+    ("gen_requant_vectors.py", "req_y.mem"),
+    ("gen_conv1_vectors.py", "c1_y.mem"),
+]
+
+
 def ensure_vectors() -> None:
     """Regenerate the $readmemh vectors if they are missing.
 
-    They are deterministic (seeded) and 4 MB, so they are gitignored rather
-    than committed -- which means a fresh clone has none and every requant
-    test would fail on a missing file instead of a real defect.
+    They are deterministic (seeded) and several MB, so they are gitignored
+    rather than committed -- which means a fresh clone has none and the tests
+    that read them would fail on a missing file instead of a real defect.
     """
-    gen = PROJECT / "model" / "gen_requant_vectors.py"
     vec_dir = PROJECT / "sim" / "vectors"
-    if not gen.exists():
-        return
-    if vec_dir.is_dir() and any(vec_dir.glob("*.mem")):
-        return
-    print("[vectors] generating requant test vectors")
-    proc = subprocess.run(
-        [sys.executable, str(gen)], cwd=str(PROJECT), capture_output=True, text=True
-    )
-    if proc.returncode != 0:
-        raise SystemExit(
-            f"Vector generation failed:\n{proc.stdout}\n{proc.stderr}"
+    for gen_name, sentinel in VECTOR_GENERATORS:
+        gen = PROJECT / "model" / gen_name
+        if not gen.exists():
+            continue
+        if (vec_dir / sentinel).exists():
+            continue
+        print(f"[vectors] generating vectors with {gen_name}")
+        proc = subprocess.run(
+            [sys.executable, str(gen)], cwd=str(PROJECT),
+            capture_output=True, text=True
         )
+        if proc.returncode != 0:
+            raise SystemExit(
+                f"{gen_name} failed:\n{proc.stdout}\n{proc.stderr}"
+            )
 
 
 def sources() -> list[Path]:

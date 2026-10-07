@@ -1,7 +1,7 @@
 ---
 title: ADR-011 Ağırlık Bellek Adresleme
 created: 2026-08-28
-modified: 2026-09-25
+modified: 2026-10-07
 type: decision
 status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl, ml]
@@ -107,3 +107,57 @@ hiçbir bayrak yanmadığı için Hafta 8'de teşhisi pahalı bir hata sınıfı
 > Bu ek madde [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]]'nın HWC kararına
 > bağlıdır; o karar CHW lehine değişirse permütasyon gereksiz hâle gelir.
 
+
+## Ek madde — 2026-10-07: şema implemente edildi, preload yolu açık kaldı
+
+`rtl/weight_feeder.sv` bu ADR'nin adresleme şemasını birebir uyguluyor: sekiz bağımsız
+banka, `bank = c_out mod 8` (banka `r` = engine satırı `r` = `weight_data` lane `r`),
+`start`'ta register'lanan `base = tile_idx * k_len`, sonra tüm bankalara aynı cycle'da aynı
+adres. Row skew engine'in içinde uygulanıyor, feeder'da değil. Senkron BRAM okuma gecikmesi
+iki girişli elastic FIFO ile karşılanıyor; coupled handshake altında (engine iki kenarı
+birlikte kabul ediyor, aktivasyon kenarı sürekli aç kalıyor) beat kaybı veya duplikasyonu
+yok. `tb_weight_feeder` banka/adres eşlemesini byte byte doğruluyor — beat saymıyor, değer
+karşılaştırıyor, çünkü lane'leri ters bağlamak **sessizce transpoze edilmiş convolution**
+üretir. Beş mutant denendi (off-by-one sayaç, tile offset'siz base, backpressure altında
+düşen valid, prefetch derinliği, bankaların bir lane kaydırılması), beşi de yakalandı.
+`tb_conv1_top` aynı şemayı uçtan uca 112 tile boyunca golden'a karşı doğruluyor.
+
+**Ama bu ADR'nin "katman başına 8 adet `.coe`, Block Memory Generator'a yüklenir" maddesi
+RTL'de hâlâ yok ve bu artık ölçülmüş bir boşluk.** Bankaların ne initialization'ı ne write
+port'u olduğu için sentez onları sabit bellek sayıp **tamamen optimize ediyor**: 2026-10-07
+`check_synth_conv1.tcl` koşusunda `u_weights` netlist'te hiç görünmüyor. Simülasyon yeşil,
+çünkü testbench bankaları hiyerarşik `$readmemh` ile dolduruyor. Yani donanıma giden yolda
+ağırlık diye bir şey yok ve hiçbir test bunu söylemiyordu — `check_synth_conv1.tcl` artık
+"ağırlık yolu netlist'te hayatta kaldı mı" kapısını bu yüzden tutuyor.
+
+Kapatma yolu iki seçenek: (a) `.coe` + Block Memory Generator IP'si (bu ADR'nin dediği),
+(b) RTL'de `$readmemh` ile BRAM initialization. İkisi de bitstream'e gömülü ağırlık
+demek, yani `ADR-012` (çalışma zamanında ağırlık yükleme) kararını değiştirmiyor.
+
+**FC1 uyarısı güncellendi:** yukarıdaki 2026-09-25 ek maddesi FC1 için
+`reshape(120,16,5,5).permute(0,2,3,1)` diyor. [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]]
+2026-10-07'de ara tamponu **padded tile-major** olarak kilitlediği için FC1 fiziksel sırayı
+doğrudan okuyacaksa doğru transform `reshape(120,2,8,5,5).permute(0,1,3,4,2)`'dir. Conv
+ağırlık export'u değişmiyor; bu ADR'nin `k = ci*(kH*kW) + kh*kW + kw` reduction order'ı ve
+"conv'da permütasyon yok" vaadi aynen geçerli.
+
+### 2026-10-07 ikinci ölçüm: write port yetti ama BRAM hâlâ çıkmıyor
+
+Boundary'ye `wr_*` load portu eklenince bankalar artık silinmiyor — ama Vivado onları
+**BRAM değil register** olarak çıkarıyor: `WARNING: [Synth 8-11357] Potential Runtime issue
+for 3D-RAM ... bank_mem_reg with 524288 registers`. Yani `logic [7:0] bank_mem [0:ROWS-1]
+[0:DEPTH-1]` şeklindeki iki boyutlu dizi bu araçta BRAM inference'a girmiyor
+(8 × 8192 × 8 = 524.288 bit, xc7z020'nin toplam FF'i 106.400 — fiziksel olarak imkânsız).
+
+İki kapatma yolu var ve **önce hangisi olduğuna karar verilmeli**, çünkü ikisi farklı kod
+üretir:
+
+- **(a) Block Memory Generator IP'si + sekiz `.coe`** — bu ADR'nin baştan dediği. `bank_mem`
+  RTL'den tamamen çıkar, yerine sekiz BMG instance gelir. Ağırlık bitstream'e gömülü kalır.
+- **(b) Inferred RTL** — her bankayı generate içinde ayrı tek boyutlu dizi yapmak
+  (`g_bank[r].mem [0:DEPTH-1]`), senkron okuma, ve initialization'ı `$readmemh` ile vermek.
+  BRAM inference'ın klasik kalıbı bu; `wr_*` portu ADR-012 için zaten yerinde kalır.
+
+(b) daha az IP bağımlılığı demek ve `tb_weight_feeder`'ın hiyerarşik yükleme yolunu
+koruyabilir (yalnız yol adı `bank_mem[r][a]` → `g_bank[r].mem[a]` olarak değişir). (a) ise
+ADR-011'in yazılı kararına birebir uyar. Karar verilmeden ikisini de yazmak israf.

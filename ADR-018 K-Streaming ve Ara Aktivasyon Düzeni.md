@@ -1,7 +1,7 @@
 ---
 title: ADR-018 K-Streaming ve Ara Aktivasyon Düzeni
 created: 2026-09-26
-modified: 2026-09-26
+modified: 2026-10-07
 type: decision
 status: önerildi
 tags: [dnn-accelerator, adr, kontrat, rtl, dataflow, bram, memory-layout]
@@ -10,7 +10,11 @@ tags: [dnn-accelerator, adr, kontrat, rtl, dataflow, bram, memory-layout]
 # ADR-018: K-Streaming Compute Engine ve Çok Katmanlı Ara Aktivasyon Düzeni
 
 ## Durum
-**Önerildi — Kişi B onayı bekliyor (2026-09-26).**
+**Karar 1 (K-streaming): türetilmiş ve implemente edildi.**
+**Karar 2 (ara aktivasyon düzeni): fiziksel layout 2026-10-07'de kilitlendi — padded
+tile-major.** Gerekçe, bedeli ve kararı geçersiz kılacak kanıt aşağıdaki
+"Ek madde — 2026-10-07" bölümünde. Kalan onay bekleyen madde yalnız FC'de kolon ekseninin
+Aşama 2'ye parkıdır.
 
 İki bağlı karar. Aşama 1'in bitiş hâli **tam ağ** olarak kesinleşince
 ([[ADR-017 Simülasyon ve Emülasyon Ortamı|ADR-017]] Sonuçlar, 2026-09-26)
@@ -22,8 +26,8 @@ kilitlenebilir hâle geldi; onu kilitlemek de K'nin nasıl indirgendiğine bağl
 | K-streaming (chunk'lama değil) | **Türetilmiş** — ADR-014 `k_last`, ADR-002 tile notu |
 | `systolic_array_os.sv` ve `pe_os.sv` değişmiyor | **Türetilmiş** — bugünkü koşan testler korunuyor |
 | A-left = ağırlık, B-top = aktivasyon | **Türetilmiş** — ADR-011 banking'den |
-| `[c_tile][H][W][8]` tile-major HWC | Onay bekliyor |
-| Ping-pong ara tampon, iki adet 8 KB | Onay bekliyor |
+| `[c_tile][H][W][8]` tile-major HWC | **Kabul edildi (2026-10-07)** |
+| Ping-pong ara tampon, iki adet 8 KB | **Kabul edildi (2026-10-07)** |
 | FC'de kolon ekseni ölü — Aşama 2'ye park | Onay bekliyor |
 
 ## Karar 1 — K-streaming
@@ -234,6 +238,127 @@ bloke etmiyor; `pad` parametresi RTL'de duruyor ama sıfırdan farklı değer i�
 davranışı yazılı değil.
 
 > Bu üç maddenin ilk ikisi kapandı, üçüncüsü **WP8'in önkoşulu.**
+
+## Ek madde — 2026-10-07: Karar 2'nin fiziksel layout'u kilitlendi
+
+Üç seçenek (dense HWC / padded tile-major / tile-major store + dense gather adapter) ADR
+ve RTL kaynakları üzerinden karşılaştırıldı; seçilen **padded tile-major**:
+
+```
+addr = (((c_out >> 3)*H + h)*W + w)*8 + (c_out & 7)
+```
+
+### Neden
+
+- `requant_array` beat'i fiziksel word ile birebir: lane `r` → `addr_base + r`, mask dışı
+  lane sıfır. **Tek aligned 64-bit write, bir port, bir cycle.** Dense HWC'de Conv1 beat'i
+  6 valid byte taşır; başlangıç offset'leri `0,6,4,2` olduğu için beat'lerin yarısı word
+  crossing yapar ve single-port direct implementation'da worst-case 2 cycle/beat eder.
+- Her physical row/tile plane 8-byte katı (Conv1 ve Pool1 dahil), FC2 `84 → 88 B`. Yani
+  [[ADR-006 AXI Stream Paket Semantiği|ADR-006]]'nın `TKEEP` all-1 değişmezi **istisnasız**
+  korunuyor. Dense HWC'de FC2'nin 84 byte'ı bu değişmezi kırıyor.
+- Exact ping-pong `2 × 6272 = 12.544 B`; kapasite `140 × 36 Kb = 645.120 B` üzerinden
+  **%1,94**, bu ADR'nin yuvarladığı 16 KB allocation ise %2,54. Dense HWC'den fark
+  `13.160 − 11.196 = 1.964 B`, yani tasarruf kararı değiştirecek büyüklükte değil.
+- Aşama 2'nin FC K-split'i için her physical word doğrudan sekiz `K` lane veriyor.
+- Alternatif 3 (gather adapter) aynı write tarafını veriyor ama Aşama 1'e padding strip +
+  64-bit repack + FIFO + backpressure taşıyan yeni bir stateful blok ekliyor; bit-exact
+  doğruluk hedefinde en büyük verification surface o.
+
+### Bedeli — dördü de açık uç, gizlenmiyor
+
+1. `line_buffer` / `window_gen` arayüzüne **`C_LOGICAL` ve `C_PHYS_STRIDE` ayrımı** şart.
+   Conv1 input `3/3`, Conv2 input `6/8`. `K_LEN` yalnız `C_LOGICAL`'dan hesaplanmalı;
+   `C_PHYS` ile hesaplanırsa `K` 150 yerine 200 olur, output shape doğru kalır, değerler
+   sessizce yanlış olur ve hiçbir bayrak yanmaz.
+2. **Bu ADR'nin kendi iddiası yanlıştı, düzeltiliyor.** Yukarıdaki "Window generator'ın
+   `c_in` parametresi bu iki durumu zaten ayırıyor" satırı mevcut RTL için geçerli değil:
+   `line_buffer` tek bir `C_IN`'i hem physical row size (`ROW_BYTES = IN_W*C_IN`,
+   `TOTAL_BYTES`) hem logical read index (`col*C_IN + ch`) için kullanıyor. Değiştirilmemiş
+   hâliyle 1568 byte'lık physical Conv2 frame'inin ilk 1176 byte'ını yanlış `(row,col,ch)`
+   olarak tüketir ve erken `frame_done` verir.
+3. Conv2 ingest `1176 → 1568 byte`. Bu bir performans ölçümü değil, byte-serialized
+   writer'ın loop sayısı farkı.
+4. **FC1 export'u [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]]'nın
+   one-liner'ı DEĞİL.** Physical sıra `[c_tile][h][w][lane]`, plain `[h][w][c]` ile aynı
+   değil; `H=W=5, C=16` için `c=8,h=1,w=0` dense HWC'de 88, tile-major'da 240'a düşüyor.
+   Doğru transform:
+
+   ```python
+   w_fc1 = w_fc1.reshape(120, 2, 8, 5, 5).permute(0, 1, 3, 4, 2).reshape(120, 400)
+   ```
+
+   Conv ağırlık export'u **değişmiyor**: [[ADR-011 Ağırlık Bellek Adresleme|ADR-011]]'in
+   `k = ci*(kH*kW) + kh*kW + kw` reduction order'ı ve "conv'da permütasyon yok" vaadi
+   ayakta. Storage layout ile reduction order aynı şey değil; physical layout'u gerekçe
+   gösterip `k`'yi spatial-major yapmak o vaadi bozar.
+5. Input `C > 8` olan gelecek bir conv layer'da `[c_tile][H][W][8]` stream mevcut row-ring'e
+   bütün kanalları aynı anda getirmiyor. K-streaming korunacaksa full-buffer gather veya
+   line-buffer redesign gerekir — **Aşama 2 blocker'ı olarak kaydedildi.**
+
+### Yapılacaklar
+
+- `line_buffer`/`window_gen`'e `C_LOGICAL` / `C_PHYS_STRIDE` ayrımını ekle.
+- Intermediate writer adresini yukarıdaki formülle kilitle; inactive lane'leri sıfır yaz ve
+  "bir word, bir cycle" assertion'ı koy.
+- `model/window_ref.py`'ye ayrı physical tile-major buffer modeli ekle; padding byte'larını
+  **nonzero sentinel** yapıp engine'e yine tam `K = 150` beat gittiğini kanıtla.
+- Kişi A'ya FC1 transform'unu bildir; `.coe` için one-hot order regression ekle.
+- Yeni test kimlikleri: `T_LAYOUT_ADDR_001` (coordinate-coded round-trip, `188`/`250`
+  checkpoint'i normative vektör), `T_CONV2_REPLAY_001` (nonzero padding sentinel + 150-beat
+  assertion), `T_FC1_ORDER_001` (one-hot weight/activation).
+
+### Bu kararı geçersiz kılacak şey
+
+İki parametreli read path'in BRAM inference'ını veya timing'ini bozduğunu gösteren bir
+post-synthesis/XSim kanıtı; ya da dense compaction packer'ın full-rate, `TKEEP` all-1 ve
+tüm katmanlarda tek kontratla daha az RTL/state ile geçtiğinin gösterilmesi. Ayrıca Aşama
+1 kapsamına input `C > 8` olan bir conv layer girerse Option 2'nin row-ring avantajı biter
+ve gather adapter yeniden değerlendirilmelidir.
+
+### Yukarıdaki "Ek madde — 2026-09-26" maddesi 3 kapandı
+
+Generator ↔ engine metadata sözleşmesi artık testbench'in elle sürdüğü bir şey değil:
+`rtl/layer_ctrl.sv` yazıldı. `start`'ı üreten o; `active_cols` tile'ın ilk (henüz kabul
+edilmemiş) `m_tile_start` beat'inden örnekleniyor, `eng_start` ancak `start_ready` ile
+kabul ediliyor ve activation gate CLEAR cycle'ı geçtikten sonra açılıyor — yani `k=0` beat'i
+kaybolmuyor. Satır grubu sınırı kabul edilen beat sayacıyla belirleniyor, `w_k` ile değil.
+Sözleşme `layer_ctrl`'ün port listesi ve sekiz bitlik `error_flags` ataması olarak yazılı.
+
+### İlk entegrasyon STA'sı — 100 MHz kapanmıyor, sebebi window yolu
+
+`vivado/check_synth_conv1.tcl` (yeni, conv1 entegrasyon kapısı) 2026-10-07'de ilk kez
+`conv1_top`'u sentezledi. Sonuç: **80 DSP48 doğru** (64 PE + 16 requant) ama
+**WNS −33,324 ns @ 100 MHz**, 3935 failing endpoint, TNS −112.987 ns.
+
+Kritik yol `u_window/k_count_reg[0]` → `u_engine/u_array/g_row[0].g_col[0].u_pe/acc_reg`:
+**67 logic level, 38 CARRY4, 42,790 ns** (logic 20,461 ns / route 22,329 ns). Üç sebep
+üst üste biniyor:
+
+1. `window_gen` `ci_index`, `kh_index`, `kw_index` değerlerini `k_count`'tan **kombinasyonel
+   32-bit bölme ve modulo** ile üretiyor. 38 CARRY4'ün kaynağı bu. `k_count` ardışık
+   arttığı için bölmeye hiç gerek yok — ci/kh/kw sayaçları aynı değerleri üretir.
+2. `line_buffer` kombinasyonel okunuyor (aşağıdaki BRAM maddesi), yani bellek okuması da
+   aynı path'in içinde.
+3. Activation yolu `layer_ctrl`'de bilinçli pass-through, dolayısıyla gather çıkışı ile PE
+   girişi arasında register yok.
+
+Üçü birlikte düzeltilmeli, çünkü `line_buffer`'ı senkron okumaya çevirmek bu ADR'nin
+istediği `C_LOGICAL` / `C_PHYS_STRIDE` ayrımıyla aynı dosyaya dokunuyor. Karşılaştırma:
+compute core tek başına +3,074 ns, `requant_array` +3,380 ns — ihlal tamamen yeni entegre
+edilen window yolunda, daha önce sentezlenmemiş koddan geliyor.
+
+Aynı koşunun ikinci bulgusu: `line_buffer` BRAM değil **flip-flop** çıkarıyor (3951 LUT +
+3985 FF, 0 BRAM). `ram_style = "block"` bir öneri; kombinasyonel okuma BRAM'i imkânsız
+kılıyor. Üçüncü bulgusu: `weight_feeder`'ın bankaları ne initialization ne write port'a
+sahip olduğu için sentez onları sabite indirip **tamamen siliyordu**; boundary'de
+`wr_*` load portu eklenerek kapatıldı (ADR-011 ek maddesi).
+
+`conv1_top` (window_gen + layer_ctrl + weight_feeder + compute_engine + requant_array)
+2026-10-07'de XSim'de uçtan uca **bit-exact** doğrulandı: `T_CONV1_E2E_001`, 112 tile,
+784 output beat ve 784 INT32 accumulator beat, iki farklı backpressure deseniyle iki kez.
+Bu top **output buffer içermiyor** — yukarıdaki fiziksel layout kararı yeni kilitlendiği
+için address generator henüz yazılmadı; requant stream'i doğrudan dışarı çıkıyor.
 
 ## Alternatifler
 

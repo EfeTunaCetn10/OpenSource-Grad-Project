@@ -1185,6 +1185,15 @@ Performans, kaynak, doğrulama ve entegrasyon etkileri nelerdir?
 - [~] `ADR-016`: Aktivasyon tensör düzeni ve byte yerleşimi →
   [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi]] — HWC, little-endian lane haritası,
   kanal dolgusu, çıkış payload'ı. **Önerildi, Kişi B onayı bekliyor**, 2026-09-25
+- [~] `ADR-017`: Simülasyon ve emülasyon ortamı →
+  [[ADR-017 Simülasyon ve Emülasyon Ortamı]] — tek simülatör XSim, cocotb/Icarus elendi,
+  Aşama 1'in bitiş hâli **tam ağ**. **Önerildi, Kişi B onayı bekliyor**, 2026-09-26
+- [~] `ADR-018`: K-streaming ve ara aktivasyon düzeni →
+  [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni]] — Karar 1 (K-streaming, harici
+  partial-sum tamponu yok) implemente edildi; Karar 2'nin fiziksel layout'u **padded
+  tile-major** olarak 2026-10-07'de kilitlendi (adres
+  `(((c>>3)*H+h)*W+w)*8+(c&7)`, ping-pong 2×8 KB). Kalan açık madde FC'de kolon ekseninin
+  Aşama 2'ye parkı
 
 ---
 

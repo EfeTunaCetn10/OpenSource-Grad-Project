@@ -1,7 +1,7 @@
 ---
 title: ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi
 created: 2026-09-25
-modified: 2026-09-25
+modified: 2026-10-07
 type: decision
 status: önerildi
 tags: [dnn-accelerator, adr, kontrat, axi, rtl, ml]
@@ -133,7 +133,17 @@ w_fc1 = w_fc1.reshape(120, 16, 5, 5).permute(0, 2, 3, 1).reshape(120, 400)
 ADR-011'in "dönüşümsüz export" maddesi conv ağırlıkları için doğru, **FC1 için değil**.
 Yazılmazsa Hafta 8'de "ağ çalışıyor ama doğruluk %10" gizemi olarak döner.
 
-## Açık kalan — çok katmanlı ara aktivasyon düzeni
+## Kapandı — çok katmanlı ara aktivasyon düzeni
+
+> [!success] Bu bölümün sorusu [[ADR-017 Simülasyon ve Emülasyon Ortamı|ADR-017]] Aşama 1'i **tam ağ** olarak
+> kesinleştirince cevaplandı, düzen de
+> [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]]'de 2026-10-07'de
+> **padded tile-major** olarak kilitlendi. Aşağıdaki öneri aynen kabul edildi;
+> fiziksel adres formülü, bedeli ve `line_buffer`'a gereken
+> `C_LOGICAL`/`C_PHYS_STRIDE` ayrımı ADR-018'in 2026-10-07 ek maddesinde.
+> **Dikkat:** yukarıdaki FC1 tek satırlık permute'u yalnız FC1 plain HWC sırada
+> beslenirse doğrudur. Fiziksel tile-major sıradan besleniyorsa doğru transform
+> `reshape(120,2,8,5,5).permute(0,1,3,4,2)`'dir.
 
 Önerilen: **`[c_tile][H][W][8]`** (tile-major HWC), kanal sayısı 8'in katı değilse son tile
 sıfırla dolgulu. Girdi frame'i bunun tek-tile, dolgusuz özel hâli.
