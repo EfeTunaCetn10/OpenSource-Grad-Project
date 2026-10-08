@@ -13,6 +13,6 @@ rtl/weight_feeder.sv
 rtl/layer_ctrl.sv
 rtl/conv1_top.sv
 
-# Not in any synthesis top yet: the AXI4-Lite register file still has no
-# wrapper that connects it to the datapath.
-# rtl/axi_lite_regs.sv
+# AXI4-Lite control wrapper (vivado/check_synth_accel.tcl).
+rtl/axi_lite_regs.sv
+rtl/accel_top.sv

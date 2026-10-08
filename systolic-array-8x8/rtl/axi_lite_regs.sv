@@ -58,7 +58,18 @@ module axi_lite_regs #(
     output logic signed [17:0]    cfg_m0     [0:7],
     output logic        [5:0]     cfg_shift_n[0:7],
     output logic                  cfg_relu   [0:7],
-    output logic                  cfg_bypass
+    output logic                  cfg_bypass,
+    output logic [8:0]            cfg_c_in,
+    output logic [2:0]            cfg_kh,
+    output logic [2:0]            cfg_kw,
+    output logic [1:0]            cfg_stride,
+    output logic [1:0]            cfg_pad,
+    output logic [5:0]            cfg_out_h,
+    output logic [5:0]            cfg_out_w,
+    output logic [7:0]            cfg_tile_idx,
+    output logic [7:0]            cfg_tile_count,
+    output logic                  cfg_param_src,
+    output logic [15:0]           cfg_k_len
 );
 
     // Version fields are intentionally local to this block so a map change
@@ -81,7 +92,7 @@ module axi_lite_regs #(
     localparam logic [ADDR_W-1:0] A_STALL_OUT    = 12'h108;
     localparam logic [ADDR_W-1:0] A_FRAME_COUNT  = 12'h10C;
 
-    logic [31:0] layer_cfg_reg;
+    logic [30:0] layer_cfg_reg;
     logic [17:0] tile_cfg_reg;
     logic        irq_en;
 
@@ -121,6 +132,7 @@ module axi_lite_regs #(
     logic        done_w1c;
     logic        commit_accept;
     logic        write_param;
+    logic [31:0] layer_merged;
 
     integer i;
     integer j;
@@ -201,7 +213,7 @@ module axi_lite_regs #(
                     read_mux[7:0] = error_latched;
                 end
                 A_LAYER_CFG: begin
-                    read_mux = layer_cfg_reg;
+                    read_mux = {1'b0, layer_cfg_reg};
                 end
                 A_TILE_CFG: begin
                     read_mux[17:0] = tile_cfg_reg;
@@ -249,6 +261,8 @@ module axi_lite_regs #(
         write_strb = w_hold  ? wstrb_hold  : s_axi_wstrb;
         write_bank = (write_addr - A_PARAM_BASE) >> 4;
         write_word = write_addr[3:2];
+        layer_merged = merge_wstrb({1'b0, layer_cfg_reg}, write_data,
+                                   write_strb);
 
         write_param = write_complete &&
                       (write_addr >= A_PARAM_BASE) &&
@@ -305,11 +319,22 @@ module axi_lite_regs #(
             cfg_relu[k]    = active_relu[k];
         end
         cfg_bypass = tile_cfg_reg[16];
+        cfg_c_in = layer_cfg_reg[8:0];
+        cfg_kh = layer_cfg_reg[11:9];
+        cfg_kw = layer_cfg_reg[14:12];
+        cfg_stride = layer_cfg_reg[16:15];
+        cfg_pad = layer_cfg_reg[18:17];
+        cfg_out_h = layer_cfg_reg[24:19];
+        cfg_out_w = layer_cfg_reg[30:25];
+        cfg_tile_idx = tile_cfg_reg[7:0];
+        cfg_tile_count = tile_cfg_reg[15:8];
+        cfg_param_src = tile_cfg_reg[17];
     end
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            layer_cfg_reg <= 32'h0;
+            layer_cfg_reg <= '0;
+            cfg_k_len <= '0;
             tile_cfg_reg <= 18'h0;
             irq_en <= 1'b0;
             written_mask <= 24'h0;
@@ -403,8 +428,7 @@ module axi_lite_regs #(
                         end
                     end
                     A_LAYER_CFG: begin
-                        layer_cfg_reg <= merge_wstrb(layer_cfg_reg, write_data,
-                                                     write_strb);
+                        layer_cfg_reg <= layer_merged[30:0];
                     end
                     A_TILE_CFG: begin
                         tile_cfg_reg <= merge_tile(tile_cfg_reg, write_data,
@@ -412,6 +436,9 @@ module axi_lite_regs #(
                     end
                     A_COMMIT: begin
                         if (commit_accept) begin
+                            // Geometry is stable before a later START.  The
+                            // bounded 9x3x3 product is sampled only on commit.
+                            cfg_k_len <= cfg_c_in * cfg_kh * cfg_kw;
                             for (i = 0; i < 8; i = i + 1) begin
                                 active_bias_q[i] <= shadow_bias_q[i];
                                 active_m0[i] <= shadow_m0[i];
