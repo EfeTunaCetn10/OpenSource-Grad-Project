@@ -14,9 +14,11 @@
 // the conv2 activation-replay problem (ADR-018 addendum item 3) cannot appear.
 // This top does NOT contain the intermediate activation buffer.  Its physical
 // layout was locked on 2026-10-07 (ADR-018 Decision 2: padded tile-major,
-// addr = (((c>>3)*H + h)*W + w)*8 + (c&7)), but the address generator, the
-// ping-pong swap and the C_LOGICAL/C_PHYS_STRIDE split that line_buffer needs
-// are not written yet.  The requantized stream leaves this block directly.
+// addr = (((c>>3)*H + h)*W + w)*8 + (c&7)); the address generator and the
+// ping-pong swap are still unwritten, so the requantized stream leaves this
+// block directly.  The C_LOGICAL/C_PHYS_STRIDE split that layout needs IS now
+// in window_gen/line_buffer and is carried on this top's parameter list, so a
+// conv2-geometry instantiation (C_IN=6, C_PHYS_STRIDE=8) is expressible here.
 //
 // Every submodule instantiated here was previously verified only in isolation.
 // This is the first time window_gen, compute_engine and requant_array share one
@@ -33,7 +35,14 @@ module conv1_top #(
     // k_len port width below.
     parameter int KERN_H     = 5,
     parameter int KERN_W     = 5,
-    parameter int C_IN       = 3,
+    // C_IN is the LOGICAL channel count: it alone sets the reduction length
+    // K = C_IN*KERN_H*KERN_W, which is what the weight banks and cfg_k_len
+    // are indexed by.  C_PHYS_STRIDE is the byte distance between adjacent
+    // columns of the stored frame (ADR-018 Decision 2, padded tile-major).
+    // Conv1 input is 3/3 so the default keeps them equal; a conv2-geometry
+    // instantiation passes 6/8 and only line_buffer's addressing changes.
+    parameter int C_IN         = 3,
+    parameter int C_PHYS_STRIDE = C_IN,
     parameter int IN_H       = 32,
     parameter int IN_W       = 32,
     parameter int STRIDE     = 1,
@@ -56,6 +65,15 @@ module conv1_top #(
     output logic                        s_ready,
     input  logic [63:0]                 s_data,
     input  logic                        s_last,
+
+    // Frame restart (window_gen's ST_DONE is no longer terminal).  One-cycle
+    // pulse; accepted only once the generator is done or still idle.  A
+    // mid-frame pulse is refused and latches restart_error, which is a
+    // separate boundary output on purpose: error_flags belongs to layer_ctrl
+    // and this condition is not layer_ctrl's to report.  Defaulted so an
+    // existing instantiation that does not drive it stays at a known 0.
+    input  logic                        restart = 1'b0,
+    output logic                        restart_error,
 
     // Weight load port (ADR-011 bank r = output channel tile_idx*ROWS + r,
     // bank-local address tile_idx*K + k).  Exposed on the boundary so the banks
@@ -150,17 +168,20 @@ module conv1_top #(
     assign window_done = win_done;
 
     window_gen #(
-        .K_H        (KERN_H),
-        .K_W        (KERN_W),
-        .C_IN       (C_IN),
-        .IN_W       (IN_W),
-        .IN_H       (IN_H),
-        .STRIDE     (STRIDE),
-        .PAD        (PAD),
-        .DATA_WIDTH (DATA_WIDTH)
+        .K_H           (KERN_H),
+        .K_W           (KERN_W),
+        .C_LOGICAL     (C_IN),
+        .C_PHYS_STRIDE (C_PHYS_STRIDE),
+        .IN_W          (IN_W),
+        .IN_H          (IN_H),
+        .STRIDE        (STRIDE),
+        .PAD           (PAD),
+        .DATA_WIDTH    (DATA_WIDTH)
     ) u_window (
         .clk           (clk),
         .rst_n         (rst_n),
+        .restart       (restart),
+        .restart_error (restart_error),
         .s_valid       (s_valid),
         .s_ready       (s_ready),
         .s_data        (s_data),
