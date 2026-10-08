@@ -1,7 +1,7 @@
 ---
 title: ADR-011 Ağırlık Bellek Adresleme
 created: 2026-08-28
-modified: 2026-09-25
+modified: 2026-10-07
 type: decision
 status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl, ml]
@@ -107,3 +107,72 @@ hiçbir bayrak yanmadığı için Hafta 8'de teşhisi pahalı bir hata sınıfı
 > Bu ek madde [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi|ADR-016]]'nın HWC kararına
 > bağlıdır; o karar CHW lehine değişirse permütasyon gereksiz hâle gelir.
 
+
+## Ek madde — 2026-10-07: şema implemente edildi, preload yolu açık kaldı
+
+`rtl/weight_feeder.sv` bu ADR'nin adresleme şemasını birebir uyguluyor: sekiz bağımsız
+banka, `bank = c_out mod 8` (banka `r` = engine satırı `r` = `weight_data` lane `r`),
+`start`'ta register'lanan `base = tile_idx * k_len`, sonra tüm bankalara aynı cycle'da aynı
+adres. Row skew engine'in içinde uygulanıyor, feeder'da değil. Senkron BRAM okuma gecikmesi
+iki girişli elastic FIFO ile karşılanıyor; coupled handshake altında (engine iki kenarı
+birlikte kabul ediyor, aktivasyon kenarı sürekli aç kalıyor) beat kaybı veya duplikasyonu
+yok. `tb_weight_feeder` banka/adres eşlemesini byte byte doğruluyor — beat saymıyor, değer
+karşılaştırıyor, çünkü lane'leri ters bağlamak **sessizce transpoze edilmiş convolution**
+üretir. Beş mutant denendi (off-by-one sayaç, tile offset'siz base, backpressure altında
+düşen valid, prefetch derinliği, bankaların bir lane kaydırılması), beşi de yakalandı.
+`tb_conv1_top` aynı şemayı uçtan uca 112 tile boyunca golden'a karşı doğruluyor.
+
+**Ama bu ADR'nin "katman başına 8 adet `.coe`, Block Memory Generator'a yüklenir" maddesi
+RTL'de hâlâ yok ve bu artık ölçülmüş bir boşluk.** Bankaların ne initialization'ı ne write
+port'u olduğu için sentez onları sabit bellek sayıp **tamamen optimize ediyor**: 2026-10-07
+`check_synth_conv1.tcl` koşusunda `u_weights` netlist'te hiç görünmüyor. Simülasyon yeşil,
+çünkü testbench bankaları hiyerarşik `$readmemh` ile dolduruyor. Yani donanıma giden yolda
+ağırlık diye bir şey yok ve hiçbir test bunu söylemiyordu — `check_synth_conv1.tcl` artık
+"ağırlık yolu netlist'te hayatta kaldı mı" kapısını bu yüzden tutuyor.
+
+Kapatma yolu iki seçenek: (a) `.coe` + Block Memory Generator IP'si (bu ADR'nin dediği),
+(b) RTL'de `$readmemh` ile BRAM initialization. İkisi de bitstream'e gömülü ağırlık
+demek, yani `ADR-012` (çalışma zamanında ağırlık yükleme) kararını değiştirmiyor.
+
+**FC1 uyarısı güncellendi:** yukarıdaki 2026-09-25 ek maddesi FC1 için
+`reshape(120,16,5,5).permute(0,2,3,1)` diyor. [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]]
+2026-10-07'de ara tamponu **padded tile-major** olarak kilitlediği için FC1 fiziksel sırayı
+doğrudan okuyacaksa doğru transform `reshape(120,2,8,5,5).permute(0,1,3,4,2)`'dir. Conv
+ağırlık export'u değişmiyor; bu ADR'nin `k = ci*(kH*kW) + kh*kW + kw` reduction order'ı ve
+"conv'da permütasyon yok" vaadi aynen geçerli.
+
+### 2026-10-07: preload yolu kapandı, bankalar gerçekten BRAM
+
+Üç adımda çözüldü ve her adım ölçüldü:
+
+1. **Write port.** Bankaların ne initialization'ı ne write port'u olduğu için sentez onları
+   sabite indirip siliyordu. `weight_feeder`'a ve `conv1_top`'un boundary'sine `wr_*` load
+   portu eklendi (`wr_en`, `wr_bank`, `wr_addr`, `wr_data`). Bu aynı zamanda `ADR-012`
+   çalışma zamanında ağırlık yükleme kararının kancasıdır.
+2. **Write port yetmedi.** Bankalar silinmeyi bıraktı ama Vivado 2025.1 iki boyutlu
+   `bank_mem [0:ROWS-1][0:DEPTH-1]` dizisini BRAM inference'a sokmuyor:
+   `WARNING: [Synth 8-11357] Potential Runtime issue for 3D-RAM ... bank_mem_reg with
+   524288 registers`. 8 × 8192 × 8 bit = 524.288 bit, xc7z020'de 106.400 FF var.
+3. **Banka başına ayrı dizi.** Bellek generate bloğuna taşındı: `g_bank[r].bank_mem
+   [0:DEPTH-1]`, banka başına tek boyutlu dizi, senkron okuma, register'lanmış çıkış.
+   Ölçüm: **RAMB36 = 16**, yani banka başına tam 2 RAMB36 — bu ADR'nin sekiz fiziksel
+   bankasının birebir karşılığı. Regression 10/10 PASS, davranış değişmedi.
+
+Bu yapı ADR-011'in `.coe` + Block Memory Generator kararını **geçersiz kılmıyor**, onun
+inferred karşılığı. Sekiz BMG instance'ı tam olarak bu generate bloğunun yerine girer;
+adresleme, banking ve port kontratı aynı kalır. Fark yalnız ağırlığın nereden geldiğidir:
+şu an `wr_*` portundan (Aşama 1'de testbench, sonra AXI), BMG'de bitstream'den. Bitstream'e
+gömülü ağırlık hedefi korunuyorsa ya sekiz `.coe` ile BMG, ya da generate içinde
+`$readmemh` initialization eklenmeli; ikisi de bu dosyada tek yere dokunur.
+
+**Testbench'ler artık bankaları hiyerarşik olarak doldurmuyor**, `wr_*` portundan yüklüyor.
+İki kazanç: yükleme yolu da test edilmiş oluyor, ve generate dizisine hiyerarşik referans
+sabit index gerektirdiği için (XSim: `'bank_mem' is not declared under prefix 'g_bank'`)
+döngü değişkeniyle poke etmek zaten mümkün değil.
+
+**FC1 uyarısı güncellendi:** yukarıdaki 2026-09-25 ek maddesi FC1 için
+`reshape(120,16,5,5).permute(0,2,3,1)` diyor. [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]]
+2026-10-07'de ara tamponu **padded tile-major** olarak kilitlediği için FC1 fiziksel sırayı
+doğrudan okuyacaksa doğru transform `reshape(120,2,8,5,5).permute(0,1,3,4,2)`'dir. Conv
+ağırlık export'u değişmiyor; bu ADR'nin `k = ci*(kH*kW) + kh*kW + kw` reduction order'ı ve
+"conv'da permütasyon yok" vaadi aynen geçerli.

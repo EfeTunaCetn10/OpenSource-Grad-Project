@@ -1,0 +1,1203 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>8×8 Systolic Array Rehberi</title>
+<style>
+  :root {
+    --ink: #1d2330; --muted: #5b6475; --line: #d6dae2; --soft: #f5f6f9;
+    --accent: #2c5fb3; --ok: #2f8f4e; --okbg: #e5f4ea; --warn: #b07800; --warnbg: #fff4d6;
+    --todo: #8a8f99; --todobg: #f1f2f4; --bad: #b3372c; --badbg: #fbe9e7;
+  }
+  @page { size: A4; margin: 14mm 40mm 14mm 13mm; }
+  * { box-sizing: border-box; }
+  html, body { background: #fff; }
+  body { font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif; color: var(--ink);
+         font-size: 10.2pt; line-height: 1.5; margin: 0; }
+  main { max-width: 760px; margin: 0 auto; padding: 0 16px; }
+  h1 { font-size: 24pt; line-height: 1.15; margin: 0 0 6px; }
+  h2 { font-size: 15pt; margin: 0 0 10px; padding-bottom: 4px; border-bottom: 2px solid var(--ink);
+       break-before: page; }
+  h3 { font-size: 11.6pt; margin: 18px 0 6px; color: var(--accent); }
+  h4 { font-size: 10.4pt; margin: 12px 0 4px; }
+  p { margin: 6px 0; }
+  code, pre, .mono { font-family: Consolas, "Cascadia Mono", monospace; font-size: 9pt; }
+  code { background: var(--soft); padding: 0 3px; border-radius: 3px; }
+  pre { background: var(--soft); border: 1px solid var(--line); border-radius: 5px; padding: 8px 10px;
+        white-space: pre-wrap; word-break: break-word; margin: 8px 0; break-inside: avoid; line-height: 1.38; }
+  pre .hl { background: #fff1b8; }
+  pre .c { color: #6a7385; }
+  table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 9.2pt; break-inside: avoid; }
+  th, td { border: 1px solid var(--line); padding: 3px 6px; text-align: left; vertical-align: top; }
+  th { background: var(--soft); }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  figure { margin: 10px 0 12px; break-inside: avoid; }
+  figure svg { width: 100%; height: auto; display: block; }
+  figcaption { font-size: 8.8pt; color: var(--muted); margin-top: 3px; }
+  .box { border-left: 4px solid var(--accent); background: #eef3fb; padding: 6px 10px; margin: 10px 0;
+         break-inside: avoid; border-radius: 0 5px 5px 0; }
+  .box.warn { border-color: var(--warn); background: var(--warnbg); }
+  .box.bad { border-color: var(--bad); background: var(--badbg); }
+  .box.ok { border-color: var(--ok); background: var(--okbg); }
+  .box b.t { display: block; margin-bottom: 2px; }
+  .badge { display: inline-block; font-size: 8pt; font-weight: 600; padding: 0 5px; border-radius: 3px;
+           border: 1px solid; white-space: nowrap; }
+  .b-ok { color: var(--ok); background: var(--okbg); border-color: var(--ok); }
+  .b-warn { color: var(--warn); background: var(--warnbg); border-color: var(--warn); }
+  .b-todo { color: var(--todo); background: var(--todobg); border-color: var(--todo); }
+  .muted { color: var(--muted); }
+  .cover { min-height: 250mm; display: flex; flex-direction: column; }
+  .cover .sub { color: var(--muted); font-size: 12pt; margin-bottom: 18px; }
+  .toc { columns: 2; column-gap: 22px; font-size: 9.6pt; margin: 6px 0; padding-left: 18px; }
+  .toc li { break-inside: avoid; }
+  .ref { color: var(--muted); font-size: 8.6pt; }
+  ol.steps > li { margin-bottom: 5px; }
+  .kv td:first-child { white-space: nowrap; font-weight: 600; }
+  svg text { font-family: "Segoe UI", Arial, sans-serif; }
+  svg .mono { font-family: Consolas, monospace; }
+  .wave td, .wave th { text-align: center; padding: 2px 4px; font-family: Consolas, monospace; font-size: 8.6pt; }
+  .wave td.on { background: var(--okbg); font-weight: 600; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 640px) { .toc { columns: 1; } .grid2 { grid-template-columns: 1fr; } }
+  @media screen { h2 { margin-top: 40px; } body { padding: 16px 0 60px; } }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============================== KAPAK ============================== -->
+<section class="cover">
+  <p class="muted" style="margin:0 0 4px">Bitirme projesi · Sistem rehberi · 2026-10-02</p>
+  <h1>8×8 Output-Stationary Systolic Array<br>Uçtan uca nasıl çalışıyor?</h1>
+  <p class="sub">RTL, Python golden model'ler, testbench'ler, Vivado akışı ve tam sistem mimarisi.
+  Kaynak: <code>C:\grad-rtl\systolic-array-8x8</code> + ADR-001…018 (repo durumu: commit <code>16d9c62</code>).</p>
+
+  <h3 style="margin-top:4px">Bu doküman nasıl okunur</h3>
+  <p>Her bölüm yeni sayfada başlar. Sağdaki boş kenar not almak için bırakıldı. Soru sorarken
+  bölüm numarasıyla referans ver (ör. <b>“§5.3, skew bankası”</b>) — dönüp aynı yere bakabilirim.
+  Kod referansları <code>dosya:satır</code> biçiminde.</p>
+  <p>Durum rozetleri, her parçanın bugün nerede olduğunu gösterir:</p>
+  <table class="kv" style="width:auto">
+    <tr><td><span class="badge b-ok">SENTEZDE</span></td><td>Yazıldı, test edildi, sentez top'una bağlı (64 DSP48, 100 MHz kapanıyor).</td></tr>
+    <tr><td><span class="badge b-warn">BİRİM</span></td><td>Yazıldı ve kendi testbench'inde PASS, ama top'a bağlı değil — sentez/STA görmedi.</td></tr>
+    <tr><td><span class="badge b-todo">YOK</span></td><td>Henüz yazılmadı (ADR'de tasarımı var).</td></tr>
+  </table>
+  <div class="box warn"><b class="t">“Agâh gözlemi” kutuları</b>
+  Kodu okurken bulduğum, ADR'lerde yazılı olmayan noktalar sarı kutularda. Bunlar benim çıkarımım;
+  doğrulanmış gerçek değil, tartışma başlığı. Hepsi §11'de toplu listede.</div>
+
+  <h3>İçindekiler</h3>
+  <ol class="toc">
+    <li>Büyük resim: ne yapıyoruz?</li>
+    <li>Matematik: convolution → matris çarpımı</li>
+    <li>Systolic array kavramı</li>
+    <li>Sayısal kontrat (INT8 / INT32 / requant)</li>
+    <li>RTL — hesap çekirdeği (pe_os, array, compute_engine, top)</li>
+    <li>RTL — veri besleme (line_buffer, window_gen)</li>
+    <li>RTL — requant_unit ve axi_lite_regs</li>
+    <li>Python model tarafı</li>
+    <li>Doğrulama: testbench'ler ve run_tests.py</li>
+    <li>Vivado akışı ve sentez sonuçları</li>
+    <li>Uçtan uca bir frame'in yolculuğu + performans + açık sorular</li>
+    <li>Karar haritası (ADR'ler) ve yol haritası</li>
+    <li>Sözlük</li>
+  </ol>
+</section>
+
+<!-- ============================== §1 ============================== -->
+<h2>§1 Büyük resim: ne yapıyoruz?</h2>
+
+<h3>§1.1 Problem ve hedef</h3>
+<p>Bir CNN'in (LeNet-5) çıkarım (inference) işinin büyük çoğunluğu çarp-topla (MAC) işlemidir (LeNet-5'te ~650 bin MAC/frame). CPU bunları sırayla
+yapar; biz PYNQ-Z2 kartındaki Zynq-7020'nin <b>PL</b> (programmable logic, FPGA kısmı) tarafına, 64 MAC'i
+<b>aynı anda</b> yapan özel bir donanım koyuyoruz. Kartın <b>PS</b> tarafı (ARM Cortex-A9) yalnızca yönetir:
+parametreleri yazar, DMA ile görüntüyü gönderir, sonucu okur.</p>
+
+<table>
+  <tr><th>Parametre</th><th>Değer</th><th>Kaynak</th></tr>
+  <tr><td>Kart / çip</td><td>PYNQ-Z2 / <code>xc7z020clg400-1</code></td><td>ADR-001</td></tr>
+  <tr><td>Araç</td><td>Vivado 2025.1 (XSim dahil)</td><td>ADR-001, ADR-017</td></tr>
+  <tr><td>Ağ</td><td>LeNet-5: 2 conv (5×5) + 2 maxpool + 3 FC, 10 sınıf, batch=1</td><td>ADR-002</td></tr>
+  <tr><td>Girdi</td><td>32×32 RGB, INT8, HWC düzeni → 3072 byte = 384 beat (64-bit)</td><td>ADR-002, 016</td></tr>
+  <tr><td>Hesap çekirdeği</td><td>8×8 = 64 PE, output-stationary, 1 PE = 1 DSP48E1</td><td>ADR-004</td></tr>
+  <tr><td>Aritmetik</td><td>INT8 × INT8 → INT32 accumulator (wrap), requant → INT8</td><td>ADR-003</td></tr>
+  <tr><td>Convolution yöntemi</td><td>Direct (line buffer + window generator), im2col yok</td><td>ADR-005</td></tr>
+  <tr><td>Veri yolu</td><td>AXI4-Stream 64-bit + AXI DMA Simple mode; kontrol AXI4-Lite</td><td>ADR-006, 007</td></tr>
+  <tr><td>Clock</td><td>Tek domain, 100 MHz (FCLK0)</td><td>ADR-008</td></tr>
+  <tr><td>Ağırlıklar</td><td>8 BRAM bankası (bank = c_out mod 8), bitstream'e gömülü</td><td>ADR-011</td></tr>
+</table>
+
+<p><b>Aşamalar:</b> Aşama 1 = tüm sistem simülasyonda (karta dokunmadan) · Aşama 2 = PYNQ-Z2 kartında ·
+Aşama 3 = aynı çekirdeği RF Fingerprint (RFF) sınıflandırmasına uyarlamak (asıl hedef).</p>
+
+<h3>§1.2 Sistem blok diyagramı</h3>
+<figure>
+<svg viewBox="0 0 680 440" xmlns="http://www.w3.org/2000/svg" font-size="11">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker>
+  </defs>
+  <!-- PS -->
+  <rect x="10" y="30" width="150" height="110" rx="6" fill="#e6eefb" stroke="#3b6fc4"/>
+  <text x="85" y="52" text-anchor="middle" font-weight="700">Processing System (PS)</text>
+  <text x="85" y="72" text-anchor="middle">ARM Cortex-A9</text>
+  <text x="85" y="90" text-anchor="middle">PYNQ Python / C sürücü</text>
+  <text x="85" y="110" text-anchor="middle" font-size="10">register yazar, DMA kurar,</text>
+  <text x="85" y="124" text-anchor="middle" font-size="10">sonucu okur</text>
+  <!-- DDR -->
+  <rect x="10" y="190" width="150" height="62" rx="6" fill="#e6eefb" stroke="#3b6fc4"/>
+  <text x="85" y="214" text-anchor="middle" font-weight="700">DDR3</text>
+  <text x="85" y="232" text-anchor="middle" font-size="10">girdi frame + sonuç buffer'ı</text>
+  <line x1="85" y1="140" x2="85" y2="188" stroke="#1d2330" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <!-- DMA -->
+  <rect x="185" y="185" width="115" height="125" rx="6" fill="#f1f2f4" stroke="#8a8f99" stroke-dasharray="5 3"/>
+  <text x="242" y="207" text-anchor="middle" font-weight="700">AXI DMA</text>
+  <text x="242" y="224" text-anchor="middle" font-size="10">Simple mode (ADR-007)</text>
+  <text x="242" y="248" text-anchor="middle" font-size="10">MM2S: DDR → PL</text>
+  <text x="242" y="266" text-anchor="middle" font-size="10">S2MM: PL → DDR</text>
+  <text x="242" y="290" text-anchor="middle" font-size="9" fill="#8a8f99">Xilinx IP, entegre değil</text>
+  <line x1="160" y1="221" x2="183" y2="221" stroke="#1d2330" marker-end="url(#ar)" marker-start="url(#ar)"/>
+  <!-- PL frame -->
+  <rect x="315" y="8" width="358" height="414" rx="8" fill="none" stroke="#1d2330" stroke-dasharray="6 4"/>
+  <text x="494" y="25" text-anchor="middle" font-weight="700">PL — Hızlandırıcı IP (tek clock, 100 MHz)</text>
+  <!-- regs -->
+  <rect x="330" y="38" width="155" height="50" rx="5" fill="#fff4d6" stroke="#b07800"/>
+  <text x="407" y="58" text-anchor="middle" class="mono" font-weight="700">axi_lite_regs</text>
+  <text x="407" y="76" text-anchor="middle" font-size="10">register map, shadow/commit</text>
+  <rect x="500" y="38" width="158" height="50" rx="5" fill="#f1f2f4" stroke="#8a8f99" stroke-dasharray="5 3"/>
+  <text x="579" y="58" text-anchor="middle" font-weight="700">layer sequencer</text>
+  <text x="579" y="76" text-anchor="middle" font-size="10" fill="#6a6f78">WP8 — yazılmadı</text>
+  <line x1="485" y1="63" x2="498" y2="63" stroke="#1d2330" marker-end="url(#ar)"/>
+  <line x1="160" y1="63" x2="328" y2="63" stroke="#1d2330" marker-end="url(#ar)"/>
+  <text x="244" y="56" text-anchor="middle" font-size="10">AXI4-Lite (kontrol)</text>
+  <!-- lb/wg -->
+  <rect x="330" y="108" width="155" height="62" rx="5" fill="#fff4d6" stroke="#b07800"/>
+  <text x="407" y="128" text-anchor="middle" class="mono" font-weight="700">line_buffer +</text>
+  <text x="407" y="144" text-anchor="middle" class="mono" font-weight="700">window_gen</text>
+  <text x="407" y="161" text-anchor="middle" font-size="10">aktivasyon pencereleri</text>
+  <path d="M300,205 L320,205 L320,150 L328,150" fill="none" stroke="#1d2330" marker-end="url(#ar)"/>
+  <text x="296" y="178" text-anchor="end" font-size="9.5">AXIS 64b</text>
+  <!-- weights -->
+  <rect x="500" y="108" width="158" height="62" rx="5" fill="#f1f2f4" stroke="#8a8f99" stroke-dasharray="5 3"/>
+  <text x="579" y="128" text-anchor="middle" font-weight="700">Ağırlık BRAM ×8</text>
+  <text x="579" y="145" text-anchor="middle" font-size="10">bank = c_out mod 8</text>
+  <text x="579" y="161" text-anchor="middle" font-size="10" fill="#6a6f78">WP4 — yazılmadı</text>
+  <!-- compute -->
+  <rect x="330" y="200" width="328" height="78" rx="5" fill="#e5f4ea" stroke="#2f8f4e" stroke-width="1.5"/>
+  <text x="494" y="222" text-anchor="middle" class="mono" font-weight="700">compute_engine</text>
+  <text x="494" y="242" text-anchor="middle" font-size="10.5">skew + FSM + systolic_array_os (8×8 pe_os)</text>
+  <text x="494" y="262" text-anchor="middle" font-size="10">sentez top'u: systolic_array_8x8 · 64 DSP48 · WNS +3,07 ns</text>
+  <line x1="407" y1="170" x2="407" y2="198" stroke="#1d2330" marker-end="url(#ar)"/>
+  <text x="413" y="189" font-size="9.5">B-top: aktivasyon</text>
+  <line x1="579" y1="170" x2="579" y2="198" stroke="#1d2330" marker-end="url(#ar)"/>
+  <text x="585" y="189" font-size="9.5">A-left: ağırlık</text>
+  <!-- requant -->
+  <rect x="330" y="300" width="155" height="52" rx="5" fill="#fff4d6" stroke="#b07800"/>
+  <text x="407" y="321" text-anchor="middle" class="mono" font-weight="700">requant_unit ×8</text>
+  <text x="407" y="339" text-anchor="middle" font-size="10">INT32 → INT8 (+ReLU)</text>
+  <line x1="407" y1="278" x2="407" y2="298" stroke="#1d2330" marker-end="url(#ar)"/>
+  <text x="413" y="292" font-size="9.5">8 × INT32 / kolon</text>
+  <rect x="500" y="300" width="158" height="52" rx="5" fill="#f1f2f4" stroke="#8a8f99" stroke-dasharray="5 3"/>
+  <text x="579" y="321" text-anchor="middle" font-weight="700">MaxPool + packer</text>
+  <text x="579" y="339" text-anchor="middle" font-size="10" fill="#6a6f78">WP6 — yazılmadı</text>
+  <line x1="485" y1="326" x2="498" y2="326" stroke="#1d2330" marker-end="url(#ar)"/>
+  <!-- ping-pong -->
+  <rect x="330" y="370" width="328" height="40" rx="5" fill="#f1f2f4" stroke="#8a8f99" stroke-dasharray="5 3"/>
+  <text x="494" y="387" text-anchor="middle" font-weight="700">Ping-pong ara tampon 2 × 8 KB — yazılmadı</text>
+  <text x="494" y="402" text-anchor="middle" font-size="9.5">katman N'in çıktısı → katman N+1'in girdisi (window_gen'e geri)</text>
+  <line x1="579" y1="352" x2="579" y2="368" stroke="#1d2330" marker-end="url(#ar)"/>
+  <path d="M330,400 L242,400 L242,312" fill="none" stroke="#1d2330" marker-end="url(#ar)"/>
+  <text x="250" y="390" font-size="9.5">sonuç 48 B (S2MM)</text>
+  <!-- legend -->
+  <rect x="12" y="330" width="14" height="10" fill="#e5f4ea" stroke="#2f8f4e"/><text x="32" y="339" font-size="10">SENTEZDE</text>
+  <rect x="12" y="350" width="14" height="10" fill="#fff4d6" stroke="#b07800"/><text x="32" y="359" font-size="10">BİRİM (top'a bağlı değil)</text>
+  <rect x="12" y="370" width="14" height="10" fill="#f1f2f4" stroke="#8a8f99" stroke-dasharray="3 2"/><text x="32" y="379" font-size="10">YOK / harici IP</text>
+</svg>
+<figcaption>Şekil 1 — Hedef sistem. Yeşil ve sarı bloklar repoda var; gri bloklar ADR'lerde tasarlanmış ama yazılmamış.
+Bugün sarı bloklar birbirine bağlı değil: her biri kendi testbench'inde ayrı doğrulanıyor.</figcaption>
+</figure>
+
+<h3>§1.3 Repo haritası</h3>
+<pre>systolic-array-8x8/
+├─ rtl/            <span class="c">— donanım (SystemVerilog)</span>
+│  ├─ pe_os.sv               <span class="c">tek PE: MAC + forwarding       [SENTEZDE]</span>
+│  ├─ systolic_array_os.sv   <span class="c">ROWS×COLS PE ağı                [SENTEZDE]</span>
+│  ├─ compute_engine.sv      <span class="c">K-streaming kontrolcü + skew    [SENTEZDE]</span>
+│  ├─ systolic_array_8x8.sv  <span class="c">sabit isimli sentez top'u       [SENTEZDE]</span>
+│  ├─ line_buffer.sv         <span class="c">5 satırlık halka tampon         [BİRİM]</span>
+│  ├─ window_gen.sv          <span class="c">convolution pencere üreticisi   [BİRİM]</span>
+│  ├─ requant_unit.sv        <span class="c">INT32→INT8 requantizer          [BİRİM]</span>
+│  └─ axi_lite_regs.sv       <span class="c">AXI4-Lite register file         [BİRİM]</span>
+├─ tb/             <span class="c">— 6 self-checking testbench (tb_*.sv)</span>
+├─ model/          <span class="c">— Python golden model'ler + vektör üreteci</span>
+├─ sim/run_tests.py <span class="c">— XSim regresyon koşucusu (6/6 PASS)</span>
+├─ sim/vectors/    <span class="c">— requant test vektörleri (.mem, üretilir, commit edilmez)</span>
+├─ vivado/         <span class="c">— create_project.tcl, check_synth.tcl, constraints.xdc</span>
+├─ reports/        <span class="c">— sentez raporları (utilization, timing, methodology)</span>
+└─ filelist.f      <span class="c">— sentez top'una giren 4 dosya</span></pre>
+<div class="box"><b class="t">Neden C:\grad-rtl?</b> Vivado emoji içeren yolları okuyamıyor (karakterleri <code>?</code>'e çevirip
+“dosya yok” diyor). Vault'taki <code>🏰 300-Projects/</code> dokümanların kopyası; RTL işi ASCII yoldaki repoda yapılıyor.
+<code>run_tests.py</code> ve <code>create_project.tcl</code> bu yüzden ASCII-yol guard'ı içeriyor.</div>
+
+<!-- ============================== §2 ============================== -->
+<h2>§2 Matematik: convolution → matris çarpımı</h2>
+
+<h3>§2.1 Bir convolution çıktısı nedir?</h3>
+<p>Conv1'de bir çıktı değeri: çıktı kanalı <code>co</code>, çıktı pikseli <code>(oy, ox)</code> için</p>
+<pre>out[oy][ox][co] = bias[co] + Σ<sub>ci=0..2</sub> Σ<sub>kh=0..4</sub> Σ<sub>kw=0..4</sub>  W[co][ci][kh][kw] · X[oy+kh][ox+kw][ci]</pre>
+<p>Üç iç içe toplamı tek bir indekse düzleştirirsek (<b>indirgeme indeksi k</b>):</p>
+<pre><span class="hl">k = ci·(kH·kW) + kh·kW + kw</span>      <span class="c">// kanal-major; PyTorch'un [co][ci][kh][kw] sırasıyla birebir</span>
+K = c_in · kH · kW                 <span class="c">// conv1: 3·5·5 = 75,  conv2: 6·5·5 = 150,  FC1: 400</span>
+out[n][co] = Σ<sub>k=0..K-1</sub> A[co][k] · B[k][n]</pre>
+<p>Bu tam olarak bir matris çarpımıdır: <b>C = A · B</b>. Burada <code>A</code> ağırlık matrisi, <code>B</code> aktivasyon
+pencereleri, <code>n</code> çıktı pikselinin düz indeksi.</p>
+
+<figure>
+<svg viewBox="0 0 680 240" xmlns="http://www.w3.org/2000/svg" font-size="11">
+  <text x="110" y="38" text-anchor="middle" font-weight="700">A = Ağırlık (M × K)</text>
+  <rect x="20" y="50" width="180" height="110" fill="#fff" stroke="#1d2330"/>
+  <rect x="20" y="50" width="180" height="38" fill="#e5f4ea" stroke="#2f8f4e"/>
+  <text x="110" y="73" text-anchor="middle" font-size="10">8 satır → A-left kenarı</text>
+  <text x="110" y="180" text-anchor="middle" font-size="10">satır = çıktı kanalı (c_out)</text>
+  <text x="110" y="194" text-anchor="middle" font-size="10">sütun = k (indirgeme)</text>
+  <text x="225" y="112" text-anchor="middle" font-size="20">×</text>
+  <text x="325" y="12" text-anchor="middle" font-weight="700">B = Aktivasyon (K × N)</text>
+  <rect x="250" y="20" width="150" height="170" fill="#fff" stroke="#1d2330"/>
+  <rect x="250" y="20" width="48" height="170" fill="#e5f4ea" stroke="#2f8f4e"/>
+  <text x="274" y="110" text-anchor="middle" font-size="9.5" transform="rotate(-90 274 110)">8 kolon → B-top kenarı</text>
+  <text x="325" y="208" text-anchor="middle" font-size="10">satır = k, sütun = çıktı pikseli n</text>
+  <text x="425" y="112" text-anchor="middle" font-size="20">=</text>
+  <text x="525" y="38" text-anchor="middle" font-weight="700">C = Çıktı (M × N)</text>
+  <rect x="450" y="50" width="150" height="110" fill="#fff" stroke="#1d2330"/>
+  <rect x="450" y="50" width="48" height="38" fill="#2f8f4e" fill-opacity="0.35" stroke="#2f8f4e"/>
+  <text x="608" y="66" font-size="10">← 8×8 tile</text>
+  <text x="608" y="80" font-size="10">= 64 PE</text>
+  <text x="525" y="180" text-anchor="middle" font-size="10">her PE bir C elemanını</text>
+  <text x="525" y="194" text-anchor="middle" font-size="10">K adım boyunca biriktirir</text>
+  <text x="340" y="232" text-anchor="middle" font-size="10.5">M = c_out · N = out_H·out_W (FC'de 1) · K = c_in·kH·kW</text>
+</svg>
+<figcaption>Şekil 2 — Convolution'ın GEMM görünümü. Donanım C'yi 8×8'lik parçalar (tile) hâlinde hesaplar.
+Her tile için A'nın 8 satırı ve B'nin 8 sütunu K adım boyunca akıtılır.</figcaption>
+</figure>
+
+<div class="box"><b class="t">Önemli: im2col yapılmıyor (ADR-005)</b>
+B matrisi bellekte hiç oluşturulmuyor. İm2col yapılsaydı her piksel ~25 kez kopyalanıp DDR'ye yazılırdı.
+Onun yerine <code>window_gen</code> B'nin sütunlarını görüntüden <b>anında</b> üretir (§6).</div>
+
+<h3>§2.2 LeNet-5 katmanları bu çerçevede</h3>
+<table>
+  <tr><th>Katman</th><th>Çıktı şekli</th><th class="n">M</th><th class="n">N</th><th class="n">K</th><th class="n">Faydalı MAC</th><th>Not</th></tr>
+  <tr><td>Conv1</td><td>28×28×6</td><td class="n">6</td><td class="n">784</td><td class="n">75</td><td class="n">352.800</td><td>5×5, c_in=3</td></tr>
+  <tr><td>Pool1</td><td>14×14×6</td><td colspan="4" class="muted">MAC yok — 2×2 max</td><td>WP6</td></tr>
+  <tr><td>Conv2</td><td>10×10×16</td><td class="n">16</td><td class="n">100</td><td class="n">150</td><td class="n">240.000</td><td>M=16 → 2 kanal tile'ı</td></tr>
+  <tr><td>Pool2</td><td>5×5×16</td><td colspan="4" class="muted">MAC yok</td><td>WP6</td></tr>
+  <tr><td>FC1</td><td>120</td><td class="n">120</td><td class="n">1</td><td class="n">400</td><td class="n">48.000</td><td>1×1 conv, c_in=400</td></tr>
+  <tr><td>FC2</td><td>84 (→88 dolgulu)</td><td class="n">84</td><td class="n">1</td><td class="n">120</td><td class="n">10.080</td><td>ADR-016 dolgusu</td></tr>
+  <tr><td>FC3</td><td>10 logit</td><td class="n">10</td><td class="n">1</td><td class="n">84</td><td class="n">840</td><td>requant bypass → INT32</td></tr>
+</table>
+<p class="muted">FC katmanları <code>kH=kW=1</code> özel durumudur (ADR-005, ADR-011): aynı donanım, ayrı veri yolu yok.
+Ama batch=1 olduğu için N=1 — 8 kolonun yalnız 1'i çalışır (§11.3).</p>
+
+<h3>§2.3 Bellek düzenleri (kim hangi sırayla saklıyor)</h3>
+<table>
+  <tr><th>Veri</th><th>Düzen</th><th>Neden</th></tr>
+  <tr><td>Ağırlıklar</td><td><b>CHW</b> — PyTorch native <code>[co][ci][kh][kw]</code>, permütasyonsuz</td><td>k sırası kendiliğinden doğru çıkıyor (ADR-011)</td></tr>
+  <tr><td>Aktivasyonlar</td><td><b>HWC</b> — kanal en hızlı eksen</td><td>Line buffer 65× küçük; çıkış da doğal olarak HWC (ADR-016)</td></tr>
+  <tr><td>FC1 ağırlığı</td><td>HWC'ye permüte: <code>reshape(120,16,5,5).permute(0,2,3,1)</code></td><td>Pool2 çıkışı HWC, <code>torch.flatten</code> CHW — uyuşmazlık</td></tr>
+  <tr><td>Byte yerleşimi</td><td>byte i → <code>TDATA[8·(i mod 8) +: 8]</code> (little-endian)</td><td>AXI + Zynq + numpy ile uyumlu, hiçbir yerde reorder yok</td></tr>
+  <tr><td>Ara tensörler</td><td><code>[c_tile][H][W][8]</code>, kanal 8'in katına sıfır dolgulu</td><td>TKEEP hep all-1 kalsın (ADR-018)</td></tr>
+</table>
+
+<!-- ============================== §3 ============================== -->
+<h2>§3 Systolic array kavramı</h2>
+
+<h3>§3.1 Output-stationary ne demek?</h3>
+<p>Her PE <b>bir çıktı elemanının</b> (C[r][c]) sahibidir. O elemanın K adımlık toplamı PE'nin içindeki
+<code>acc_reg</code>'de birikir ve hesap bitene kadar dışarı çıkmaz. Hareket eden şey veridir:</p>
+<ul>
+  <li><b>Ağırlıklar soldan sağa akar</b> (A-left kenarı): satır r = çıktı kanalı r.</li>
+  <li><b>Aktivasyonlar yukarıdan aşağı akar</b> (B-top kenarı): kolon c = çıktı pikseli c.</li>
+  <li>Her PE her cycle gelen <code>a</code> ile <code>b</code>'yi çarpar, acc'ye ekler ve ikisini de komşusuna iletir.</li>
+</ul>
+<p>Böylece bir ağırlık bir kez okunur ve 8 PE'de kullanılır, bir aktivasyon da bir kez okunur ve 8 PE'de kullanılır —
+bellek trafiği 8× azalır. Alternatif <b>weight-stationary</b> (ağırlık PE'de sabit, kısmi toplam akar) PE'ler arası
+kısmi toplam yolu gerektirirdi; output-stationary doğrulaması daha basit olduğu için seçildi (Abstract §3.2).</p>
+
+<figure>
+<svg viewBox="0 0 680 370" xmlns="http://www.w3.org/2000/svg" font-size="10.5">
+  <defs><marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker></defs>
+  <g id="grid">
+    <!-- PEs 4x4 -->
+    <g fill="#e5f4ea" stroke="#2f8f4e">
+      <rect x="220" y="90" width="56" height="44" rx="4"/><rect x="300" y="90" width="56" height="44" rx="4"/><rect x="380" y="90" width="56" height="44" rx="4"/><rect x="460" y="90" width="56" height="44" rx="4"/>
+      <rect x="220" y="155" width="56" height="44" rx="4"/><rect x="300" y="155" width="56" height="44" rx="4"/><rect x="380" y="155" width="56" height="44" rx="4"/><rect x="460" y="155" width="56" height="44" rx="4"/>
+      <rect x="220" y="220" width="56" height="44" rx="4"/><rect x="300" y="220" width="56" height="44" rx="4"/><rect x="380" y="220" width="56" height="44" rx="4"/><rect x="460" y="220" width="56" height="44" rx="4"/>
+      <rect x="220" y="285" width="56" height="44" rx="4"/><rect x="300" y="285" width="56" height="44" rx="4"/><rect x="380" y="285" width="56" height="44" rx="4"/><rect x="460" y="285" width="56" height="44" rx="4"/>
+    </g>
+    <g text-anchor="middle" class="mono" font-size="9.5">
+      <text x="248" y="110">PE 0,0</text><text x="328" y="110">PE 0,1</text><text x="408" y="110">PE 0,2</text><text x="488" y="110">PE 0,3</text>
+      <text x="248" y="175">PE 1,0</text><text x="328" y="175">PE 1,1</text><text x="408" y="175">PE 1,2</text><text x="488" y="175">PE 1,3</text>
+      <text x="248" y="240">PE 2,0</text><text x="328" y="240">PE 2,1</text><text x="408" y="240">PE 2,2</text><text x="488" y="240">PE 2,3</text>
+      <text x="248" y="305">PE 3,0</text><text x="328" y="305">PE 3,1</text><text x="408" y="305">PE 3,2</text><text x="488" y="305">PE 3,3</text>
+    </g>
+    <g text-anchor="middle" font-size="9" fill="#2f8f4e">
+      <text x="248" y="126">acc</text><text x="328" y="126">acc</text><text x="408" y="126">acc</text><text x="488" y="126">acc</text>
+      <text x="248" y="191">acc</text><text x="328" y="191">acc</text><text x="408" y="191">acc</text><text x="488" y="191">acc</text>
+      <text x="248" y="256">acc</text><text x="328" y="256">acc</text><text x="408" y="256">acc</text><text x="488" y="256">acc</text>
+      <text x="248" y="321">acc</text><text x="328" y="321">acc</text><text x="408" y="321">acc</text><text x="488" y="321">acc</text>
+    </g>
+    <!-- horizontal arrows -->
+    <g stroke="#1d2330" marker-end="url(#ar2)">
+      <line x1="276" y1="112" x2="298" y2="112"/><line x1="356" y1="112" x2="378" y2="112"/><line x1="436" y1="112" x2="458" y2="112"/>
+      <line x1="276" y1="177" x2="298" y2="177"/><line x1="356" y1="177" x2="378" y2="177"/><line x1="436" y1="177" x2="458" y2="177"/>
+      <line x1="276" y1="242" x2="298" y2="242"/><line x1="356" y1="242" x2="378" y2="242"/><line x1="436" y1="242" x2="458" y2="242"/>
+      <line x1="276" y1="307" x2="298" y2="307"/><line x1="356" y1="307" x2="378" y2="307"/><line x1="436" y1="307" x2="458" y2="307"/>
+      <!-- vertical -->
+      <line x1="248" y1="134" x2="248" y2="153"/><line x1="328" y1="134" x2="328" y2="153"/><line x1="408" y1="134" x2="408" y2="153"/><line x1="488" y1="134" x2="488" y2="153"/>
+      <line x1="248" y1="199" x2="248" y2="218"/><line x1="328" y1="199" x2="328" y2="218"/><line x1="408" y1="199" x2="408" y2="218"/><line x1="488" y1="199" x2="488" y2="218"/>
+      <line x1="248" y1="264" x2="248" y2="283"/><line x1="328" y1="264" x2="328" y2="283"/><line x1="408" y1="264" x2="408" y2="283"/><line x1="488" y1="264" x2="488" y2="283"/>
+      <!-- inputs left -->
+      <line x1="140" y1="112" x2="218" y2="112"/><line x1="140" y1="177" x2="218" y2="177"/><line x1="140" y1="242" x2="218" y2="242"/><line x1="140" y1="307" x2="218" y2="307"/>
+      <!-- inputs top -->
+      <line x1="248" y1="18" x2="248" y2="88"/><line x1="328" y1="18" x2="328" y2="88"/><line x1="408" y1="18" x2="408" y2="88"/><line x1="488" y1="18" x2="488" y2="88"/>
+    </g>
+    <!-- skew squares left: row r has r squares -->
+    <g fill="#fff4d6" stroke="#b07800">
+      <rect x="191" y="171" width="12" height="12"/>
+      <rect x="191" y="236" width="12" height="12"/><rect x="177" y="236" width="12" height="12"/>
+      <rect x="191" y="301" width="12" height="12"/><rect x="177" y="301" width="12" height="12"/><rect x="163" y="301" width="12" height="12"/>
+      <!-- top: column c has c squares -->
+      <rect x="322" y="61" width="12" height="12"/>
+      <rect x="402" y="61" width="12" height="12"/><rect x="402" y="47" width="12" height="12"/>
+      <rect x="482" y="61" width="12" height="12"/><rect x="482" y="47" width="12" height="12"/><rect x="482" y="33" width="12" height="12"/>
+    </g>
+    <g font-size="10" text-anchor="end">
+      <text x="135" y="116">W[0][k]</text><text x="135" y="181">W[1][k]</text><text x="135" y="246">W[2][k]</text><text x="135" y="311">W[3][k]</text>
+    </g>
+    <text x="40" y="350" font-size="10">sol kenar: ağırlık (çıktı kanalı başına bir akış)</text>
+    <text x="560" y="40" font-size="10">üst kenar:</text>
+    <text x="560" y="54" font-size="10">aktivasyon</text>
+    <text x="560" y="68" font-size="10">(piksel başına)</text>
+    <text x="535" y="160" font-size="10">sarı kare = 1 cycle</text>
+    <text x="535" y="174" font-size="10">gecikme (skew)</text>
+    <text x="535" y="210" font-size="10">acc yerinde kalır;</text>
+    <text x="535" y="224" font-size="10">yalnız DRAIN'de</text>
+    <text x="535" y="238" font-size="10">kolon kolon okunur</text>
+  </g>
+</svg>
+<figcaption>Şekil 3 — Output-stationary dataflow (gerçek dizi 8×8, burada 4×4 çizildi). Satır r'nin ağırlık akışı r cycle,
+kolon c'nin aktivasyon akışı c cycle geciktirilir. Böylece aynı k değerine ait ağırlık ve aktivasyon PE(r,c)'de aynı anda buluşur.</figcaption>
+</figure>
+
+<h3>§3.2 Skew neden şart? — Wavefront</h3>
+<p>Ağırlık PE(r,c)'ye ulaşmak için c tane PE'den geçer (c cycle). Aktivasyon da r tane PE'den geçer (r cycle).
+Girişte satır r'yi r cycle, kolon c'yi c cycle geciktirirsek <code>k</code>'inci ağırlık ve <code>k</code>'inci aktivasyon
+PE(r,c)'ye <b>aynı cycle'da</b> ulaşır:</p>
+<pre>PE(r,c) cycle t'de k = t − r − c  çarpımını yapar   (0 ≤ k &lt; K ise)
+ilk MAC: t = r + c          son MAC: t = K − 1 + r + c
+tüm tile'ın son MAC'i: PE(7,7), t = K − 1 + 14</pre>
+<p>Aşağıdaki tablo 3×3'lük bir dizide K=3 için hangi PE'nin hangi cycle'da hangi k'yı işlediğini gösterir. Köşegen
+şeklinde ilerleyen bu desene <b>wavefront</b> denir.</p>
+<table class="wave">
+  <tr><th>PE \ cycle</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th></tr>
+  <tr><th>(0,0)</th><td class="on">k0</td><td class="on">k1</td><td class="on">k2</td><td></td><td></td><td></td><td></td></tr>
+  <tr><th>(0,1) (1,0)</th><td></td><td class="on">k0</td><td class="on">k1</td><td class="on">k2</td><td></td><td></td><td></td></tr>
+  <tr><th>(0,2) (1,1) (2,0)</th><td></td><td></td><td class="on">k0</td><td class="on">k1</td><td class="on">k2</td><td></td><td></td></tr>
+  <tr><th>(1,2) (2,1)</th><td></td><td></td><td></td><td class="on">k0</td><td class="on">k1</td><td class="on">k2</td><td></td></tr>
+  <tr><th>(2,2)</th><td></td><td></td><td></td><td></td><td class="on">k0</td><td class="on">k1</td><td class="on">k2</td></tr>
+</table>
+<p>Toplam süre <code>K + (rows−1) + (cols−1)</code> = 3 + 2 + 2 = 7 cycle. <code>model/verify_architecture.py</code> tam olarak bu
+denklemi (<code>run_cycles = k_len + rows + cols − 2</code>) Python'da cycle cycle simüle ederek doğruluyor (§8.2).</p>
+
+<h3>§3.3 Tile'ın yaşam döngüsü (özet)</h3>
+<ol class="steps">
+  <li><b>CLEAR</b> (1 cycle): 64 accumulator sıfırlanır, PE'ler arası iletim register'ları boşaltılır.</li>
+  <li><b>FEED</b> (K cycle, stall'larla uzayabilir): her cycle 8 ağırlık + 8 aktivasyon (iki 64-bit beat) içeri alınır.</li>
+  <li><b>FLUSH</b> (rows+cols−2 = 14 cycle): yeni veri yok; içerideki son veriler dizinin sağ-alt köşesine kadar akar.</li>
+  <li><b>DRAIN</b> (cols = 8 cycle): her cycle bir kolon okunur — 8 satırın INT32 sonucu tek beat'te çıkar.</li>
+</ol>
+<p>K=400'lü tam bir 8×8 tile: 1 + 400 + 14 + 8 = 423 cycle (+1 IDLE kabul). 400 üretken cycle → <b>%96,6</b> MAC-slot kullanımı.</p>
+
+<!-- ============================== §4 ============================== -->
+<h2>§4 Sayısal kontrat (ADR-003)</h2>
+<p>Bu proje iki kişilik ekibin iki ucunu (Kişi A: ML/quantization, Kişi B: RTL) birbirine bağlıyor. Sözleşme şu:
+<b>Python integer golden model ile RTL bit-bit aynı sonucu verecek.</b> Bunun için her aritmetik adım tanımlı.</p>
+
+<table>
+  <tr><th>Alan</th><th>Karar</th></tr>
+  <tr><td>Ağırlık</td><td>signed INT8, simetrik (zero-point = 0), <b>per-output-channel</b> scale <code>s_w[co]</code></td></tr>
+  <tr><td>Aktivasyon</td><td>signed INT8, simetrik, per-tensor scale <code>s_x</code></td></tr>
+  <tr><td>Çarpım</td><td>INT16 (tam, kayıpsız)</td></tr>
+  <tr><td>Accumulator</td><td>signed INT32, <b>wrap</b> (mod 2³²) — accumulator'da saturation yok</td></tr>
+  <tr><td>Bias</td><td>INT32, acc biriminde: <code>bias_q = round(b / (s_w·s_x))</code></td></tr>
+  <tr><td>M0</td><td>17 anlamlı bit, <code>[2¹⁶, 2¹⁷)</code> aralığına normalize, 18-bit signed register'da (MSB hep 0)</td></tr>
+  <tr><td>n</td><td>unsigned 6-bit shift (0..63)</td></tr>
+  <tr><td>Requant</td><td><code>y_raw = (a·M0 + half_ulp) &gt;&gt;&gt; n</code>, <code>half_ulp = n==0 ? 0 : 2ⁿ⁻¹</code>, 64-bit signed</td></tr>
+  <tr><td>Rounding</td><td>round-half-up (eşitlikte +∞ yönüne)</td></tr>
+  <tr><td>ReLU + saturation</td><td><code>y = clamp(lo, 127, y_raw)</code>, <code>lo = 0</code> (ReLU) veya <code>−128</code></td></tr>
+</table>
+
+<h3>§4.1 Float scale nereden (M0, n) olur?</h3>
+<p>Gerçek sayı = scale × tamsayı. Bir katmanın çıktısı için:</p>
+<pre>y_float = s_w·s_x · acc            <span class="c">// acc = Σ w_q·x_q (+bias_q)</span>
+y_q     = y_float / s_y = (s_w·s_x / s_y) · acc = M · acc
+M       ≈ M0 · 2⁻ⁿ                  <span class="c">// FPGA'da float çarpma yok; tamsayı çarp + kaydır</span></pre>
+<p>M genelde 0,001–0,05 arasıdır. <code>n</code>, <code>M0 = round(M·2ⁿ)</code> değeri [2¹⁶, 2¹⁷) aralığına düşecek şekilde seçilir —
+böylece M0 her zaman 17 anlamlı bit taşır (maksimum hassasiyet). Bu dönüşüm <b>Kişi A'nın export script'inde</b> yapılır; RTL yalnızca tamsayıları görür.</p>
+
+<h3>§4.2 Çalışan bir örnek</h3>
+<p><code>M = 0,0123</code> olsun. <code>2¹⁶ ≤ 0,0123·2ⁿ &lt; 2¹⁷</code> şartını sağlayan <code>n = 23</code>; <code>M0 = round(0,0123·8.388.608) = 103.180</code>.
+(<code>M0/2²³ = 0,01230001</code>.) Bias eklenmiş accumulator <code>a = 4321</code> için:</p>
+<pre>a·M0          = 4321 · 103180            = 445.840.780
+half_ulp      = 2²²                      =   4.194.304
+toplam                                   = 450.035.084
+&gt;&gt;&gt; 23  (÷ 8.388.608, floor)              = 53          <span class="c">// float: 4321·0,0123 = 53,148 ✓</span>
+clamp(−128, 127, 53)                     = 53, out_sat = 0
+a = −4321  →  −53   ·   a = 12000  →  y_raw = 148 → clamp → 127, out_sat = 1</pre>
+<p class="ref">Bu değerler <code>model/requant_ref.py</code> ile hesaplandı (2026-10-02).</p>
+
+<h3>§4.3 Neden round-half-up? (ve floor shift hilesi)</h3>
+<p>Python'un <code>&gt;&gt;</code> operatörü negatif sayılarda <b>floor</b> yapar (−∞'a yuvarlar); Verilog'un signed <code>&gt;&gt;&gt;</code>'ı da öyle.
+Floor'dan önce yarım birim (<code>half_ulp</code>) eklemek = round-half-up. Örnek <code>n=1</code>:</p>
+<pre>−5 &gt;&gt; 1          = −3     <span class="c">// floor(−2,5): sadece kaydırma</span>
+(−5 + 1) &gt;&gt; 1    = −2     <span class="c">// round-half-up(−2,5) = −2  (+∞ yönüne)</span></pre>
+<p>İki dil de aynı şeyi ekstra kodsuz yapar, bu yüzden bit-exact eşleşme bedavadır. Nearest-even (bankacı yuvarlaması)
+RTL'de ekstra parite mantığı isterdi.</p>
+
+<h3>§4.4 Neden 64-bit? Neden INT32 wrap?</h3>
+<ul>
+  <li><b>64-bit:</b> <code>|a·M0| &lt; 2³¹·2¹⁷ = 2⁴⁸</code>; ama <code>n=63</code>'te <code>half_ulp = 2⁶²</code>. Toplamın taşmaması için 64 bit gerekir.</li>
+  <li><b>Wrap:</b> mod 2³² toplama <b>birleşmelidir</b> (associative) — golden model toplamları hangi sırayla yaparsa yapsın sonuç aynı.
+  Saturating accumulator sıraya bağımlı olurdu. Pratikte MAC indirgemesinde taşma imkânsız: <code>|INT8·INT8| ≤ 16.384</code>, taşmak için
+  <code>K &gt; 131.071</code> lazım; ağın en büyük K'sı 400. Asıl risk <b>bias toplaması</b> (<code>|bias_q| + K·16384 ≤ 2³¹−1</code> koşulu).</li>
+  <li><b>Saturation yalnız en sonda:</b> requant çıkışında INT8'e clamp.</li>
+</ul>
+
+<h3>§4.5 Tuzaklar (ADR-003'te sözleşme maddesi olmalarının sebebi)</h3>
+<div class="box bad"><b class="t">Verilog signedness tuzağı</b>
+Bir ifadede tek bir operand unsigned ise <b>tüm ifade</b> unsigned olur ve <code>&gt;&gt;&gt;</code> mantıksal kaydırmaya döner —
+negatif acc'de çöp çıkar. “Python varsayılan olarak doğru, Verilog varsayılan olarak yanlış.” Bu yüzden
+requant yolunda her aritmetik sinyal <code>signed</code>; yalnız shift miktarı <code>n</code> unsigned.</div>
+<div class="box warn"><b class="t">Rounding testi neden zor? — tie vektörleri</b>
+Yuvarlama kuralları yalnız <b>tam yarıda</b> (<code>a·M0 mod 2ⁿ = 2ⁿ⁻¹</code>) ayrışır. Rastgele 200.000 vektörün <b>hiçbiri</b> böyle
+bir noktaya denk gelmiyor. Üstelik M0 ≥ 2¹⁶ olduğu için tie'ların final INT8 değeri hep saturate oluyor — sadece <code>out_y</code>'ye bakan test
+yanlış yuvarlama kuralıyla da geçer. Çözüm: tie vektörlerini matematikle üretmek (§8.4) ve clamp öncesi <code>out_y_raw</code>'ı da karşılaştırmak.</div>
+<div class="box"><b class="t">Bit-exact'in kapsamı</b>
+PyTorch'un quantized modeli ile integer golden model bit-exact <b>olmayacak</b> (farklı yuvarlama). Bit-exact zincir:
+<b>integer golden ↔ RTL ↔ FPGA</b>. PyTorch ↔ golden karşılaştırması tolerans tabanlıdır.</div>
+
+<!-- ============================== §5 ============================== -->
+<h2>§5 RTL — hesap çekirdeği</h2>
+<p>Hiyerarşi: <code>systolic_array_8x8</code> → <code>compute_engine</code> → <code>systolic_array_os</code> → 64 × <code>pe_os</code>.
+Dördü de <span class="badge b-ok">SENTEZDE</span>.</p>
+
+<h3>§5.1 pe_os.sv — tek işlem elemanı (81 satır)</h3>
+<figure>
+<svg viewBox="0 0 680 250" xmlns="http://www.w3.org/2000/svg" font-size="10.5">
+  <defs><marker id="ar3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker></defs>
+  <text x="14" y="46" class="mono">a_in (8b)</text>
+  <line x1="80" y1="50" x2="478" y2="50" stroke="#1d2330" marker-end="url(#ar3)"/>
+  <rect x="480" y="36" width="70" height="28" fill="#fff" stroke="#1d2330"/><text x="515" y="54" text-anchor="middle" font-size="9.5">FF (step)</text>
+  <line x1="550" y1="50" x2="610" y2="50" stroke="#1d2330" marker-end="url(#ar3)"/><text x="614" y="54" class="mono">a_out →</text>
+  <text x="14" y="91" class="mono">b_in (8b)</text>
+  <line x1="80" y1="95" x2="478" y2="95" stroke="#1d2330" marker-end="url(#ar3)"/>
+  <rect x="480" y="81" width="70" height="28" fill="#fff" stroke="#1d2330"/><text x="515" y="99" text-anchor="middle" font-size="9.5">FF (step)</text>
+  <line x1="550" y1="95" x2="610" y2="95" stroke="#1d2330" marker-end="url(#ar3)"/><text x="614" y="99" class="mono">b_out ↓</text>
+  <rect x="165" y="118" width="300" height="72" rx="6" fill="none" stroke="#2f8f4e" stroke-dasharray="5 3"/>
+  <text x="172" y="132" font-size="9.5" fill="#2f8f4e">DSP48E1'e haritalanır (use_dsp)</text>
+  <line x1="150" y1="50" x2="150" y2="150" stroke="#1d2330"/><line x1="150" y1="150" x2="190" y2="150" stroke="#1d2330" marker-end="url(#ar3)"/>
+  <line x1="172" y1="95" x2="172" y2="140" stroke="#1d2330"/><line x1="172" y1="140" x2="192" y2="146" stroke="#1d2330"/>
+  <circle cx="208" cy="152" r="16" fill="#fff" stroke="#1d2330"/><text x="208" y="157" text-anchor="middle" font-size="15">×</text>
+  <line x1="224" y1="152" x2="282" y2="152" stroke="#1d2330" marker-end="url(#ar3)"/>
+  <text x="252" y="146" text-anchor="middle" font-size="9">INT16→32</text>
+  <circle cx="298" cy="152" r="16" fill="#fff" stroke="#1d2330"/><text x="298" y="157" text-anchor="middle" font-size="15">+</text>
+  <line x1="314" y1="152" x2="356" y2="152" stroke="#1d2330" marker-end="url(#ar3)"/>
+  <rect x="358" y="134" width="90" height="36" fill="#e5f4ea" stroke="#2f8f4e"/><text x="403" y="156" text-anchor="middle" class="mono" font-size="10">acc_reg 32b</text>
+  <path d="M448,162 L458,162 L458,206 L298,206 L298,170" fill="none" stroke="#1d2330" marker-end="url(#ar3)"/>
+  <line x1="448" y1="142" x2="610" y2="142" stroke="#1d2330" marker-end="url(#ar3)"/><text x="614" y="146" class="mono">acc_out</text>
+  <text x="14" y="232" font-size="10.5"><tspan class="mono">mac_fire = step ∧ a_valid_in ∧ b_valid_in ∧ ¬clear_acc ∧ ¬pipe_flush</tspan>  → acc_reg'in yazma izni</text>
+</svg>
+<figcaption>Şekil 4 — PE iç yapısı. Valid bitleri veriyle birlikte iletilir (ayrı FF'ler, çizilmedi).</figcaption>
+</figure>
+
+<table>
+  <tr><th>Port</th><th>Yön</th><th>Anlam</th></tr>
+  <tr><td><code>step</code></td><td>in</td><td>Global ilerleme izni. 0 iken tüm dizi donar (stall). Tüm PE'ler aynı step'i görür.</td></tr>
+  <tr><td><code>clear_acc</code></td><td>in</td><td>acc_reg ← 0 (yeni tile başlangıcı).</td></tr>
+  <tr><td><code>pipe_flush</code></td><td>in</td><td>a_out/b_out ve valid'lerini sıfırla (önceki tile'dan kalan veri sızmasın).</td></tr>
+  <tr><td><code>a_in, a_valid_in</code></td><td>in</td><td>Soldan gelen ağırlık + geçerlilik.</td></tr>
+  <tr><td><code>b_in, b_valid_in</code></td><td>in</td><td>Yukarıdan gelen aktivasyon + geçerlilik.</td></tr>
+  <tr><td><code>a_out, b_out (+valid)</code></td><td>out</td><td>Register'lı iletim: bir sonraki cycle komşuya.</td></tr>
+  <tr><td><code>acc_out</code></td><td>out</td><td>Biriken INT32 değer (sürekli görünür).</td></tr>
+  <tr><td><code>mac_fire</code></td><td>out</td><td>Bu cycle MAC yapıldı mı (gözlem / verim ölçümü).</td></tr>
+</table>
+<pre><span class="c">// pe_os.sv:41-46 — kombinasyonel çarpım ve ateşleme</span>
+product     = a_in * b_in;                                   <span class="c">// signed 8×8 = 16 bit</span>
+product_ext = $signed({{(ACC_WIDTH-PROD_WIDTH){product[PROD_WIDTH-1]}}, product}); <span class="c">// sign-extend</span>
+<span class="hl">mac_fire    = step &amp;&amp; a_valid_in &amp;&amp; b_valid_in &amp;&amp; !clear_acc &amp;&amp; !pipe_flush;</span>
+
+<span class="c">// pe_os.sv:70-75 — accumulator</span>
+if (clear_acc)      acc_reg &lt;= '0;
+else if (mac_fire)  acc_reg &lt;= acc_reg + product_ext;   <span class="c">// 32-bit: doğal wrap</span></pre>
+<p><b>Dikkat edilecek ayrıntılar:</b></p>
+<ul>
+  <li><b>Valid'ler veriyle akar.</b> Bir PE yalnız iki girişi de geçerliyse MAC yapar. Bu sayede partial tile'larda (ör. 6 satır aktif)
+  kullanılmayan PE'ler hiç biriktirmez; acc'leri 0 kalır. Ayrıca skew'den önceki/sonraki “boş” cycle'lar hesabı bozmaz.</li>
+  <li><b>Çarpım kombinasyonel, a_in'den direkt.</b> PE çarpımı girişteki değerle yapar, iletimi bir sonraki cycle'a register'lar.
+  Yani PE(0,0) veriyi aldığı cycle'da çarpar; PE(0,1) bir cycle sonra.</li>
+  <li><b>Senkron reset</b> (<code>always_ff @(posedge clk) if (!rst_n)</code>): DSP48 çıkarımına uygun; SoC sarmalayıcıdaki reset senkronizatörü sürecek.</li>
+  <li><code>initial</code> bloğundaki <code>$error</code>'lar parametre kontrolü (elaboration-time sigorta), donanım üretmez.</li>
+</ul>
+
+<h3>§5.2 systolic_array_os.sv — PE ağı (79 satır)</h3>
+<p>Bir <code>generate</code> çift döngüsüyle ROWS×COLS PE üretir ve aralarına “link” dizileri koyar:</p>
+<pre>logic signed [7:0] a_link [0:ROWS-1][0:COLS];   <span class="c">// a_link[r][c] = PE(r,c)'nin a girişi, [r][c+1] = çıkışı</span>
+logic signed [7:0] b_link [0:ROWS][0:COLS-1];   <span class="c">// b_link[r][c] = PE(r,c)'nin b girişi, [r+1][c] = çıkışı</span>
+assign a_link[r][0] = a_left_flat[r*8 +: 8];    <span class="c">// sol kenar</span>
+assign b_link[0][c] = b_top_flat[c*8 +: 8];     <span class="c">// üst kenar</span>
+assign c_acc_flat[(r*COLS+c)*32 +: 32] = acc_link[r][c];  <span class="c">// row-major paketleme</span></pre>
+<ul>
+  <li><b>Düz (flat) bus'lar:</b> 8 adet 8-bit değer tek bir 64-bit vektörde: lane i = bitler <code>[8i+7 : 8i]</code>. Bu, AXI byte lane düzeniyle aynı.</li>
+  <li><b>Kritik sözleşme:</b> bu modül skew yapmaz. “Kenar akışları zaten satır/kolon indeksine göre gecikmeli gelmeli” (yorum, satır 4). Skew compute_engine'de.</li>
+  <li>K kavramını hiç bilmez — sadece step, clear, flush ve kenar akışları. Bu yüzden K-streaming'e geçişte (ADR-018) <b>değişmedi</b>.</li>
+</ul>
+
+<h3>§5.3 compute_engine.sv — K-streaming kontrolcüsü (294 satır)</h3>
+<p>Dizinin etrafındaki beyin: başlatma, giriş el sıkışması, skew, durum makinesi, drain ve partial-tile maskesi.</p>
+
+<h4>Arayüz</h4>
+<table>
+  <tr><th>Grup</th><th>Sinyaller</th><th>Anlam</th></tr>
+  <tr><td>Başlatma</td><td><code>start, start_ready, active_rows, active_cols, k_len</code></td><td>start yalnız IDLE'da kabul; boyutlar o an kilitlenir</td></tr>
+  <tr><td>Ağırlık girişi</td><td><code>weight_valid/ready, weight_data[63:0]</code></td><td>8 lane = 8 çıktı kanalının k'ıncı ağırlığı</td></tr>
+  <tr><td>Aktivasyon girişi</td><td><code>activation_valid/ready, activation_data[63:0]</code></td><td>8 lane = 8 çıktı pikselinin k'ıncı aktivasyonu</td></tr>
+  <tr><td>Çıkış</td><td><code>out_valid/ready, out_acc_flat[255:0], out_lane_valid, out_col, out_k_last, out_last</code></td><td>Bir kolon/cycle, 8 × INT32</td></tr>
+  <tr><td>Durum</td><td><code>busy, done, config_error, drain_stall, cycle_count, mac_fire_flat</code></td><td>Gözlem; done ve config_error 1-cycle darbe</td></tr>
+</table>
+
+<h4>Durum makinesi</h4>
+<figure>
+<svg viewBox="0 0 680 210" xmlns="http://www.w3.org/2000/svg" font-size="10.5">
+  <defs><marker id="ar4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker></defs>
+  <g fill="#e6eefb" stroke="#3b6fc4" stroke-width="1.4">
+    <circle cx="60" cy="80" r="36"/><circle cx="190" cy="80" r="36"/><circle cx="320" cy="80" r="36"/><circle cx="450" cy="80" r="36"/><circle cx="600" cy="80" r="36"/>
+  </g>
+  <g text-anchor="middle" font-weight="700" class="mono" font-size="11">
+    <text x="60" y="84">IDLE</text><text x="190" y="84">CLEAR</text><text x="320" y="84">FEED</text><text x="450" y="84">FLUSH</text><text x="600" y="84">DRAIN</text>
+  </g>
+  <g stroke="#1d2330" marker-end="url(#ar4)"><line x1="96" y1="80" x2="152" y2="80"/><line x1="226" y1="80" x2="282" y2="80"/><line x1="356" y1="80" x2="412" y2="80"/><line x1="486" y1="80" x2="562" y2="80"/></g>
+  <g text-anchor="middle" font-size="9.5">
+    <text x="124" y="32">start ∧</text><text x="124" y="44">boyutlar geçerli</text>
+    <text x="255" y="44">1 cycle</text>
+    <text x="385" y="32">son k</text><text x="385" y="44">kabul edildi</text>
+    <text x="523" y="32">rows+cols−2</text><text x="523" y="44">cycle</text>
+    <text x="320" y="132">kaynak yoksa</text><text x="320" y="144">bekle (step=0)</text>
+    <text x="600" y="132">out_ready=0</text><text x="600" y="144">ise bekle</text>
+    <text x="60" y="132">geçersiz start →</text><text x="60" y="144">config_error darbesi</text>
+  </g>
+  <path d="M600,150 Q330,215 60,150" fill="none" stroke="#1d2330" stroke-dasharray="4 3" marker-end="url(#ar4)"/>
+  <text x="330" y="200" text-anchor="middle" font-size="9.5">son kolon çıktı (out_last) → done darbesi</text>
+</svg>
+<figcaption>Şekil 5 — compute_engine FSM'i. 1×1 tile'da (rows+cols ≤ 2) FLUSH atlanır, FEED doğrudan DRAIN'e geçer.</figcaption>
+</figure>
+
+<h4>(a) Çift el sıkışma — <code>pair_ready</code></h4>
+<pre><span class="c">// compute_engine.sv:102-108</span>
+<span class="hl">assign pair_ready       = (state == FEED) &amp;&amp; weight_valid &amp;&amp; activation_valid;</span>
+assign weight_ready     = pair_ready;
+assign activation_ready = pair_ready;
+assign array_step  = (state == CLEAR) || (state == FLUSH) || pair_ready;</pre>
+<p>Ağırlık ve aktivasyon <b>yalnız birlikte</b> kabul edilir. Biri gelmiş diğeri gelmemişse ikisi de beklenir ve dizi donar
+(<code>array_step = 0</code>). Böylece hiçbir beat tek başına tüketilip kaybolmaz ya da çoğalmaz. <code>ready</code>'ler aşağı akıştaki
+hiçbir sinyale (<code>out_ready</code>) bağlı değil — kombinasyonel “downstream → upstream” yolu yok (timing ve deadlock için iyi).</p>
+
+<h4>(b) Üçgen skew bankası</h4>
+<figure>
+<svg viewBox="0 0 680 200" xmlns="http://www.w3.org/2000/svg" font-size="10">
+  <defs><marker id="ar5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker></defs>
+  <g class="mono" font-size="9.5">
+    <text x="10" y="24">lane 0</text><text x="10" y="46">lane 1</text><text x="10" y="68">lane 2</text><text x="10" y="90">lane 3</text>
+    <text x="10" y="112">lane 4</text><text x="10" y="134">lane 5</text><text x="10" y="156">lane 6</text><text x="10" y="178">lane 7</text>
+  </g>
+  <g stroke="#1d2330" marker-end="url(#ar5)">
+    <line x1="60" y1="20" x2="268" y2="20"/><line x1="60" y1="42" x2="268" y2="42"/><line x1="60" y1="64" x2="268" y2="64"/><line x1="60" y1="86" x2="268" y2="86"/>
+    <line x1="60" y1="108" x2="268" y2="108"/><line x1="60" y1="130" x2="268" y2="130"/><line x1="60" y1="152" x2="268" y2="152"/><line x1="60" y1="174" x2="268" y2="174"/>
+  </g>
+  <g fill="#fff4d6" stroke="#b07800">
+    <rect x="70" y="35" width="14" height="14"/>
+    <rect x="70" y="57" width="14" height="14"/><rect x="88" y="57" width="14" height="14"/>
+    <rect x="70" y="79" width="14" height="14"/><rect x="88" y="79" width="14" height="14"/><rect x="106" y="79" width="14" height="14"/>
+    <rect x="70" y="101" width="14" height="14"/><rect x="88" y="101" width="14" height="14"/><rect x="106" y="101" width="14" height="14"/><rect x="124" y="101" width="14" height="14"/>
+    <rect x="70" y="123" width="14" height="14"/><rect x="88" y="123" width="14" height="14"/><rect x="106" y="123" width="14" height="14"/><rect x="124" y="123" width="14" height="14"/><rect x="142" y="123" width="14" height="14"/>
+    <rect x="70" y="145" width="14" height="14"/><rect x="88" y="145" width="14" height="14"/><rect x="106" y="145" width="14" height="14"/><rect x="124" y="145" width="14" height="14"/><rect x="142" y="145" width="14" height="14"/><rect x="160" y="145" width="14" height="14"/>
+    <rect x="70" y="167" width="14" height="14"/><rect x="88" y="167" width="14" height="14"/><rect x="106" y="167" width="14" height="14"/><rect x="124" y="167" width="14" height="14"/><rect x="142" y="167" width="14" height="14"/><rect x="160" y="167" width="14" height="14"/><rect x="178" y="167" width="14" height="14"/>
+  </g>
+  <text x="274" y="24" class="mono" font-size="9.5">→ PE(0,0)  gecikme 0 (doğrudan giriş)</text>
+  <text x="274" y="46" class="mono" font-size="9.5">→ PE(1,0)  1 cycle</text>
+  <text x="274" y="178" class="mono" font-size="9.5">→ PE(7,0)  7 cycle</text>
+  <text x="400" y="90" font-size="10">weight_skew[r][d]: lane r'nin d cycle önceki değeri.</text>
+  <text x="400" y="106" font-size="10">Diziye yalnız [r][r−1] gider.</text>
+  <text x="400" y="122" font-size="10">Aynı yapı aktivasyon kolonları için de var.</text>
+  <text x="400" y="138" font-size="10">Banka yalnız array_step=1 iken kayar →</text>
+  <text x="400" y="154" font-size="10">stall'da veri donar, kaymaz.</text>
+</svg>
+<figcaption>Şekil 6 — Skew gecikme bankası (ağırlık tarafı). Sentezde shift register'a (SRL) dönüşür: raporda 56 SRL.</figcaption>
+</figure>
+<pre><span class="c">// compute_engine.sv:127-135 — dizi sınırında skew seçimi</span>
+if (comb_ri == 0) a_left_flat[0]  = weight_data[0];            <span class="c">// satır 0: gecikmesiz</span>
+else              a_left_flat[r]  = <span class="hl">weight_skew[r][r-1]</span>;      <span class="c">// satır r: r cycle gecikmeli</span>
+<span class="c">// compute_engine.sv:212-219 — kaydırma (CLEAR hariç her step'te)</span>
+weight_skew[r][0]   &lt;= (state == FEED) ? weight_data[r] : '0;   <span class="c">// FLUSH'ta sıfır/invalid besler</span>
+weight_skew_v[r][0] &lt;= (state == FEED) &amp;&amp; pair_ready &amp;&amp; (r &lt; rows_reg);  <span class="c">// partial tile maskesi</span>
+weight_skew[r][d]   &lt;= weight_skew[r][d-1];</pre>
+<p>Partial tile maskesi burada: <code>r ≥ active_rows</code> olan satırların valid'i hiç 1 olmaz, o satırdaki PE'ler biriktirmez.</p>
+
+<h4>(c) FLUSH neden tam rows+cols−2?</h4>
+<p>Son k'yı içeren beat FEED'in son cycle'ında (t = K−1) kabul edilir. §3.2'deki formüle göre PE(7,7) onu
+t = K−1+14'te işler. FLUSH 14 cycle sürer (t = K … K+13), yani tam son MAC'in olduğu cycle'da biter
+(<code>compute_engine.sv:272</code>: <code>flush_count + 1 ≥ flush_target</code>). Partial tile'da hedef <code>rows+cols−2</code>'ye küçülür.</p>
+
+<h4>(d) DRAIN — kolon kolon okuma</h4>
+<pre><span class="c">// compute_engine.sv:173-178</span>
+out_acc_flat[r*32 +: 32] = array_c_flat[(r*COLS + <span class="hl">drain_col</span>)*32 +: 32];   <span class="c">// r = 0..7</span>
+out_lane_valid = (1 &lt;&lt; rows_reg) - 1;    <span class="c">// ör. 6 satır → 0b0011_1111</span>
+out_k_last     = (state == DRAIN);        <span class="c">// her drain beat'i tamamlanmış indirgemedir</span>
+out_last       = (state == DRAIN) &amp;&amp; (drain_col == cols_reg - 1);</pre>
+<p>Bir beat = bir çıktı pikseli × 8 çıktı kanalı. Neden satır değil kolon? Çünkü her lane hep aynı çıktı kanalını taşır →
+o lane'in requantizer'ı hep aynı <code>(M0, n, bias)</code> demetini kullanır (ADR-014 “drain şekli”). Bonus: çıktı doğrudan HWC sırasında.</p>
+<div class="box"><b class="t">Tasarım takası: tile'lar sıralı</b>
+Accumulator'lar DRAIN boyunca dizide tutulur; bir sonraki tile'ın CLEAR'ı son drain beat'i kabul edilene kadar bekler.
+Maliyet: tile başına 8 cycle drain + 14 flush. Kazanç: ikinci bir 64×32-bit accumulator bankasına gerek yok (yorum, satır 12-15).</div>
+
+<h4>(e) Konfigürasyon kontrolü</h4>
+<p>IDLE'da <code>start</code> gelince: <code>active_rows ∈ [1,8]</code>, <code>active_cols ∈ [1,8]</code>, <code>k_len ∈ [1, K_MAX]</code> değilse
+<code>config_error</code> 1 cycle yanar, makine IDLE'da kalır (<code>compute_engine.sv:234-237</code>).</p>
+
+<h3>§5.4 systolic_array_8x8.sv — sentez top'u (36 satır)</h3>
+<pre>compute_engine #(.ROWS(8), .COLS(8), .K_MAX(1024), .DATA_WIDTH(8), .ACC_WIDTH(32)) u_engine (.*);</pre>
+<ul>
+  <li><code>.*</code> = aynı isimli tüm portları otomatik bağla (SystemVerilog implicit port connection).</li>
+  <li>Port genişlikleri parametrelerden türetilmiş: <code>active_rows[3:0]</code> çünkü <code>$clog2(8+1) = 4</code> (0..8'i ifade etmek için);
+  <code>k_len[10:0]</code> çünkü <code>$clog2(1024+1) = 11</code>.</li>
+  <li><code>K_MAX=1024</code>: ağın en büyük K'sı 400; pratikte tavan yok.</li>
+  <li>Sabit isimli olmasının sebebi: Vivado OOC sentezi ve <code>check_synth.tcl</code>'in DSP sayısını bu top üzerinde denetlemesi.</li>
+</ul>
+
+<!-- ============================== §6 ============================== -->
+<h2>§6 RTL — veri besleme: line_buffer + window_gen</h2>
+<p>İkisi de <span class="badge b-warn">BİRİM</span>. <code>window_gen</code>, <code>line_buffer</code>'ı kendi içinde instantiate eder; birlikte
+“AXI-Stream'den gelen ham görüntü → compute_engine'in B-top girişi” dönüşümünü yapar.</p>
+
+<h3>§6.1 line_buffer.sv — 5 satırlık halka tampon (144 satır)</h3>
+<p>5×5 convolution bir çıktı satırı için girdinin 5 satırına ihtiyaç duyar. Tüm görüntüyü (3072 B) değil, yalnız son
+<code>K_H = 5</code> satırı tutar; yeni satır en eski slotun üzerine yazılır (halka).</p>
+<pre>ROW_BYTES   = IN_W · C_IN                 <span class="c">// conv1: 32·3 = 96 byte/satır</span>
+BYTE_GROUPS = ceil(ROW_BYTES / 8)         <span class="c">// 12</span>
+MEM_DEPTH   = K_H · BYTE_GROUPS           <span class="c">// 60 adres/banka × 8 banka = 480 byte</span>
+
+<span class="c">// bir byte'ın yeri (line_buffer.sv:72-75 ve 107-111)</span>
+byte_in_row = col · C_IN + ch             <span class="c">// HWC: kanal en hızlı</span>
+<span class="hl">bank        = byte_in_row mod 8</span>
+<span class="hl">addr        = (row mod K_H) · BYTE_GROUPS + byte_in_row / 8</span></pre>
+<table>
+  <tr><th>Örnek (conv1)</th><th class="n">byte_in_row</th><th class="n">bank</th><th class="n">addr</th></tr>
+  <tr><td>piksel (row 0, col 0, R)</td><td class="n">0</td><td class="n">0</td><td class="n">0</td></tr>
+  <tr><td>piksel (row 0, col 2, R)</td><td class="n">6</td><td class="n">6</td><td class="n">0</td></tr>
+  <tr><td>piksel (row 0, col 3, G)</td><td class="n">10</td><td class="n">2</td><td class="n">1</td></tr>
+  <tr><td>piksel (row 7, col 31, B)</td><td class="n">95</td><td class="n">7</td><td class="n">(7 mod 5)·12 + 11 = 35</td></tr>
+</table>
+<h4>Yazma tarafı</h4>
+<ul>
+  <li><code>s_ready = allow_input ∧ ¬beat_pending ∧ ¬frame_done ∧ count &lt; TOTAL</code>: bir 64-bit beat alınır, <code>beat_reg</code>'e konur.</li>
+  <li>Sonra beat'in 8 byte'ı <b>teker teker</b> (cycle başına 1 byte) yazılır — çünkü bir beat aynı bankaya birden fazla kez düşebilir ve satır sınırını
+  geçebilir (conv2'nin satırı 84 byte, 8'e bölünmüyor).</li>
+  <li><b>row_pause:</b> bir satır beat'in ortasında bittiğinde kalan byte'lar bekletilir, ta ki <code>window_gen</code> <code>resume_write</code> diyene kadar.
+  Bu, halkada henüz okunmamış bir satırın üzerine yazılmasını önler.</li>
+  <li><code>rows_written</code>: tamamen yazılmış satır sayısı. <code>window_gen</code> bunu bekler.</li>
+  <li><code>s_last</code> kullanılmıyor: TKEEP olmadığı için geometri byte sayısıyla belirleniyor; port DMA sarmalayıcısı için duruyor.</li>
+</ul>
+<h4>Okuma tarafı</h4>
+<p>Kombinasyonel: <code>(rd_row, rd_col, rd_ch)</code> ver, aynı cycle'da <code>rd_byte</code> gelsin. <code>rd_valid</code> yalnız satır yazılmışsa ve koordinat sınır içindeyse 1.</p>
+<div class="box warn"><b class="t">Agâh gözlemi — BRAM çıkarımı</b>
+<code>byte_mem</code> <code>(* ram_style = "block" *)</code> ile işaretli ama okuması asenkron (kombinasyonel). 7-series BRAM yalnız
+<b>senkron</b> (register'lı) okuma destekler; Vivado büyük ihtimalle bunu distributed RAM'e (LUTRAM) çevirir veya uyarı verir.
+Modül hiç sentezlenmediği için bu henüz görülmedi. Boyut küçük (480 B) olduğu için LUTRAM da kabul edilebilir — ama entegrasyonda kontrol edilmeli.</div>
+
+<h3>§6.2 window_gen.sv — pencere üreticisi (233 satır)</h3>
+<p>Görev: compute_engine'in B-top kenarına, §2'deki <b>B matrisinin 8 sütununu</b> k sırasıyla akıtmak. Her çıkış beat'i
+= aynı k değerinde 8 farklı çıktı pikseli.</p>
+<pre><span class="c">// Çıkış sırası (window_gen.sv yorumu + model/window_ref.py)</span>
+for out_y in 0..OUT_H-1:                     <span class="c">// çıktı satırı</span>
+  for tile_x in 0, 8, 16, ...:               <span class="c">// 8 kolonluk grup (son grup kısmi)</span>
+    for k in 0..K_LEN-1:                     <span class="c">// ci → kh → kw  (kanal-major)</span>
+      beat[lane] = X[out_y·S + kh][(tile_x+lane)·S + kw][ci]   lane = 0..7
+      m_active_cols = min(8, OUT_W − tile_x) <span class="c">// conv1: 8,8,8,4   conv2: 8,2</span></pre>
+
+<figure>
+<svg viewBox="0 0 680 175" xmlns="http://www.w3.org/2000/svg" font-size="10.5">
+  <defs><marker id="ar6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker></defs>
+  <g fill="#e6eefb" stroke="#3b6fc4"><rect x="20" y="50" width="120" height="50" rx="8"/><rect x="215" y="50" width="130" height="50" rx="8"/><rect x="420" y="50" width="130" height="50" rx="8"/><rect x="590" y="50" width="75" height="50" rx="8"/></g>
+  <g text-anchor="middle" class="mono" font-weight="700"><text x="80" y="72">ST_INPUT</text><text x="280" y="72">ST_READ</text><text x="485" y="72">ST_OUTPUT</text><text x="627" y="80">ST_DONE</text></g>
+  <g text-anchor="middle" font-size="9.5"><text x="80" y="89">satırlar yazılsın</text><text x="280" y="89">8 cycle: lane başına 1 byte</text><text x="485" y="89">m_valid=1, beat hazır</text></g>
+  <g stroke="#1d2330" marker-end="url(#ar6)"><line x1="140" y1="75" x2="213" y2="75"/><line x1="345" y1="75" x2="418" y2="75"/><line x1="550" y1="75" x2="588" y2="75"/></g>
+  <text x="177" y="44" text-anchor="middle" font-size="9">5 satır hazır</text>
+  <text x="381" y="44" text-anchor="middle" font-size="9">lane 7 bitti</text>
+  <path d="M485,100 Q382,150 280,100" fill="none" stroke="#1d2330" marker-end="url(#ar6)"/>
+  <text x="382" y="150" text-anchor="middle" font-size="9.5">m_ready: sonraki k veya sonraki tile_x</text>
+  <path d="M440,50 Q260,-14 80,50" fill="none" stroke="#1d2330" stroke-dasharray="4 3" marker-end="url(#ar6)"/>
+  <text x="260" y="10" text-anchor="middle" font-size="9.5">satırın son tile'ı bitti → sonraki out_y için yeni satır bekle</text>
+</svg>
+<figcaption>Şekil 7 — window_gen FSM'i. Her beat için 8 cycle READ + en az 1 cycle OUTPUT.</figcaption>
+</figure>
+
+<pre><span class="c">// window_gen.sv:135-139 — k'dan kaynak koordinatına</span>
+ci_index   = k_count / (K_H*K_W);
+kh_index   = (k_count / K_W) % K_H;
+kw_index   = k_count % K_W;
+source_row = out_y*STRIDE - PAD + kh_index;
+source_col = tile_x*STRIDE - PAD + kw_index + <span class="hl">gather_lane*STRIDE</span>;</pre>
+<ul>
+  <li><b>Akış kontrolü (satır 110-119):</b> ST_INPUT'ta gereken alt satır (<code>bottom_row = out_y·S − PAD + K_H − 1</code>) yazılmışsa
+  <code>allow_input = 0</code> yapılır ve okuma başlar; değilse <code>resume_write = 1</code> ile line_buffer'a devam izni verilir.</li>
+  <li><b>Kısmi tile (ADR-018 sessiz hata sınıfı):</b> <code>gather_lane ≥ active_count</code> olan lane'ler sıfırla doldurulur ve
+  <code>m_active_cols</code> gerçek kolon sayısını bildirir. Yanlış yapılırsa her satırın son pikselleri çöp olur ama tensör boyutu doğru göründüğü için fark edilmez.</li>
+  <li><b>Padding:</b> çerçeve dışı koordinatlar için <code>rd_en=0</code> → sıfır. Aşama 1 kontratı <code>PAD = 0</code>.</li>
+  <li><b>Metadata çıkışları:</b> <code>m_k, m_tile_row, m_tile_x, m_tile_start (k==0), m_tile_last (k==K−1)</code> — layer sequencer (WP8) için. Bugün testbench elle kullanıyor.</li>
+</ul>
+<div class="box warn"><b class="t">Agâh gözlemi — besleme hızı</b>
+Bir beat <b>en az 9 cycle</b> sürüyor (8 READ + 1 OUTPUT), compute_engine ise cycle başına 1 beat yiyebilir. Entegre edilirse
+conv katmanlarında FEED süresi ~9× uzar. Ayrıca girdi yazımı (1 byte/cycle) ile hesap üst üste binmiyor: <code>allow_input</code> yalnız ST_INPUT'ta açık.
+Bu modül doğruluk-önce yazılmış; hız etkisi §11.3'te sayısal olarak var.</div>
+
+<!-- ============================== §7 ============================== -->
+<h2>§7 RTL — requant_unit ve axi_lite_regs</h2>
+
+<h3>§7.1 requant_unit.sv — INT32 → INT8 (396 satır) <span class="badge b-warn">BİRİM</span></h3>
+<p>Bir lane'in INT32 accumulator'ını ADR-003 formülüyle INT8'e çevirir. Sistemde 8 tane olacak (her drain lane'i için bir tane).
+ADR-014 arayüz ve zamanlama sözleşmesini tanımlar.</p>
+<figure>
+<svg viewBox="0 0 680 240" xmlns="http://www.w3.org/2000/svg" font-size="10">
+  <defs><marker id="ar7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker></defs>
+  <rect x="4" y="40" width="120" height="70" rx="5" fill="#fff" stroke="#1d2330"/>
+  <text x="64" y="60" text-anchor="middle" font-weight="700">giriş</text>
+  <text x="64" y="76" text-anchor="middle" class="mono" font-size="8.5">in_acc, in_k_last</text>
+  <text x="64" y="90" text-anchor="middle" class="mono" font-size="8.5">cfg_* (bias,M0,n,</text>
+  <text x="64" y="102" text-anchor="middle" class="mono" font-size="8.5">relu,bypass)</text>
+  <rect x="140" y="40" width="125" height="70" rx="5" fill="#e6eefb" stroke="#3b6fc4"/>
+  <text x="202" y="58" text-anchor="middle" font-weight="700">S0</text>
+  <text x="202" y="74" text-anchor="middle" class="mono" font-size="9">a = wrap32(acc+bias)</text>
+  <text x="202" y="88" text-anchor="middle" class="mono" font-size="9">ovf tespiti</text>
+  <text x="202" y="102" text-anchor="middle" font-size="9">cfg burada örneklenir</text>
+  <rect x="295" y="40" width="115" height="70" rx="5" fill="#e6eefb" stroke="#3b6fc4"/>
+  <text x="352" y="58" text-anchor="middle" font-weight="700">S1</text>
+  <text x="352" y="76" text-anchor="middle" class="mono" font-size="9">p = a · M0</text>
+  <text x="352" y="90" text-anchor="middle" font-size="9">(32×18 → 64 bit,</text>
+  <text x="352" y="102" text-anchor="middle" font-size="9">~2 DSP48)</text>
+  <rect x="440" y="40" width="130" height="70" rx="5" fill="#e6eefb" stroke="#3b6fc4"/>
+  <text x="505" y="58" text-anchor="middle" font-weight="700">S2</text>
+  <text x="505" y="74" text-anchor="middle" class="mono" font-size="9">(p+half_ulp)&gt;&gt;&gt;n</text>
+  <text x="505" y="88" text-anchor="middle" class="mono" font-size="9">veya bypass: a</text>
+  <text x="505" y="102" text-anchor="middle" class="mono" font-size="9">clamp(lo,127)</text>
+  <g stroke="#1d2330" marker-end="url(#ar7)"><line x1="124" y1="75" x2="138" y2="75"/><line x1="265" y1="75" x2="293" y2="75"/><line x1="410" y1="75" x2="438" y2="75"/><line x1="570" y1="75" x2="598" y2="75"/></g>
+  <text x="602" y="66" class="mono" font-size="9">out_y</text><text x="602" y="78" class="mono" font-size="9">out_y_raw</text><text x="602" y="90" class="mono" font-size="9">out_sat/ovf</text><text x="602" y="102" class="mono" font-size="9">out_last</text>
+  <text x="64" y="32" text-anchor="middle" font-size="9" fill="#b3372c">k_last=0 → düşürülür</text>
+  <rect x="440" y="140" width="60" height="30" rx="4" fill="#fff4d6" stroke="#b07800"/><text x="470" y="159" text-anchor="middle" class="mono">skid0</text>
+  <rect x="510" y="140" width="60" height="30" rx="4" fill="#fff4d6" stroke="#b07800"/><text x="540" y="159" text-anchor="middle" class="mono">skid1</text>
+  <text x="300" y="152" text-anchor="end" font-size="9.5">çıkış sırası: S2 → skid0 → skid1</text>
+  <text x="300" y="166" text-anchor="end" font-size="9.5">(çıkış durursa sonuçlar sıraya girer)</text>
+  <text x="14" y="200" class="mono" font-size="9.5">pipe_ce = ¬(S2 ∧ skid0 ∧ skid1 dolu ∧ ¬out_ready)  → üç kuyruk da doluysa S0/S1/S2 birlikte donar</text>
+  <text x="14" y="218" class="mono" font-size="9.5">in_ready  ← register'lı: pipe_ce ∧ ¬(kuyruk bir sonraki cycle'da dolacak)</text>
+  <text x="14" y="234" font-size="9.5">Normal gecikme LAT = 3 cycle (kabul → S0 → S1 → S2 = out_valid), bypass'ta da aynı.</text>
+</svg>
+<figcaption>Şekil 8 — requant_unit pipeline'ı ve skid kuyruğu.</figcaption>
+</figure>
+<h4>Satır satır önemli noktalar</h4>
+<pre><span class="c">// S0 (111-115): bias toplamı + taşma tespiti — iki pozitifin toplamı negatif (veya tersi) ise taştı</span>
+s0_sum_ext  = {in_acc[31], in_acc} + {cfg_bias_q[31], cfg_bias_q};   <span class="c">// 33 bit</span>
+s0_a_comb   = s0_sum_ext[31:0];                                          <span class="c">// wrap32</span>
+s0_ovf_comb = (in_acc[31] == cfg_bias_q[31]) &amp;&amp; (s0_a_comb[31] != in_acc[31]);
+
+<span class="c">// S2 (124-131): half_ulp = 1 &lt;&lt;&lt; (n-1), n=0 ise 0</span>
+shifted_comb = <span class="hl">(s1_product + half_ulp_comb) &gt;&gt;&gt; s1_shift_n</span>;
+raw_comb     = s1_bypass ? s1_a : shifted_comb;
+lo_comb      = s1_relu ? 0 : -128;            <span class="c">// ReLU = clamp alt sınırı, ayrı aşama değil</span>
+if (s1_bypass) sat_comb = 0;                   <span class="c">// bypass'ta saturation “olmadı” sayılır</span>
+
+<span class="c">// k_last kapısı (322): yalnız tamamlanmış indirgeme pipeline'a girer</span>
+s0_valid &lt;= accept &amp;&amp; <span class="hl">in_k_last</span>;</pre>
+<ul>
+  <li><b>Config veriyle akar:</b> <code>cfg_*</code> örnek S0'a girerken yakalanır ve S1/S2'ye kopyalanır. Pipeline ortasında parametre değişse bile işteki örnek etkilenmez.</li>
+  <li><b><code>out_y_raw</code> neden port?</b> Clamp öncesi 64-bit değer: tie testleri yalnız burada yuvarlama kuralını ayırt edebiliyor (§4.5). Sentezde bağlanmazsa optimize edilir, maliyeti sıfır.</li>
+  <li><b>Bypass (son katman, FC3):</b> <code>out_y_raw = a</code> (bias eklenmiş INT32 logit, 64-bit'e sign-extend); downstream <code>[31:0]</code>'ı alır.
+  <code>out_sat = 0</code>, çünkü aksi hâlde her logit |a|&gt;127 olduğu için <code>sat_seen</code> her frame'de anlamsızca 1 olurdu (ADR-014 ek madde 4).</li>
+  <li><b><code>in_k_last = 0</code> örneği:</b> el sıkışmayı normal tamamlar ve düşürülür; asla stall edilmez (stall etse yukarı akış k_last'ı üretemez → deadlock).</li>
+  <li><b>Assertion (366-384):</b> <code>in_valid ∧ in_last ⇒ in_k_last</code>. İhlal “yukarı akış yasak girişi” olarak raporlanır — aksi hâlde TLAST kaybolur, DMA asla bitmez.</li>
+  <li><b>in_ready register'lı:</b> <code>out_ready</code> → <code>in_ready</code> kombinasyonel yolu yok (Roadmap §7.1). Kuyruk derinliği 3 (S2 + 2 skid) bu register gecikmesini tolere etmek için.</li>
+</ul>
+
+<h3>§7.2 axi_lite_regs.sv — kontrol düzlemi (439 satır) <span class="badge b-warn">BİRİM</span></h3>
+<h4>AXI4-Lite'a 1 dakikalık giriş</h4>
+<p>Beş bağımsız kanal, her biri valid/ready el sıkışmalı: <b>AW</b> (yazma adresi), <b>W</b> (yazma verisi + <code>wstrb</code> byte maskesi),
+<b>B</b> (yazma cevabı), <b>AR</b> (okuma adresi), <b>R</b> (okuma verisi). AW ve W herhangi sırada gelebilir; slave ikisini de tutar
+(<code>aw_hold</code>, <code>w_hold</code>) ve ikisi de gelince yazmayı tamamlar, B cevabı verir (<code>axi_lite_regs.sv:236-251</code>).
+Okuma 1 cycle'da R kanalına register'lanır.</p>
+<h4>Register map (ADR-015)</h4>
+<table>
+  <tr><th>Offset</th><th>Ad</th><th>Tip</th><th>İçerik</th></tr>
+  <tr><td>0x000</td><td>VERSION</td><td>RO</td><td>[31:16] rtl_ver=1, [15:0] regmap_ver=1</td></tr>
+  <tr><td>0x004</td><td>CONTROL</td><td>RW</td><td>[0] START (W1S, 1-cycle darbe) · [1] SOFT_RESET (W1S) · [2] IRQ_EN</td></tr>
+  <tr><td>0x008</td><td>STATUS</td><td>RO</td><td>[0] IDLE [1] BUSY [2] DONE (W1C) [3] ERROR [4] TABLE_VALID</td></tr>
+  <tr><td>0x00C</td><td>ERROR</td><td>W1C</td><td>[0] CFG_M0 [1] CFG_SHIFT [2] ACC_OVF [3] CFG_WR_BUSY [4] TLAST_EARLY [5] TLAST_LATE [6] TIMEOUT [7] PARAM_INCOMPLETE</td></tr>
+  <tr><td>0x010</td><td>LAYER_CFG</td><td>RW</td><td>c_in[8:0] kH[11:9] kW[14:12] stride[16:15] pad[18:17] out_H[24:19] out_W[30:25] (decode WP8'de)</td></tr>
+  <tr><td>0x014</td><td>TILE_CFG</td><td>RW</td><td>[7:0] t [15:8] tile_count [16] REQ_BYPASS [17] PARAM_SRC</td></tr>
+  <tr><td>0x040+16i</td><td>BIAS_Q[i] / M0[i] / SHIFT[i]</td><td>RW</td><td>+0x0 bias 32b · +0x4 M0[17:0] · +0x8 n[5:0], relu[8] · +0xC rezerve (i = 0..7)</td></tr>
+  <tr><td>0x0C0</td><td>PARAM_COMMIT</td><td>W1S</td><td>[0] COMMIT</td></tr>
+  <tr><td>0x0C4</td><td>PARAM_STATUS</td><td>RO</td><td>[23:0] written_mask · [24] COMMITTED</td></tr>
+  <tr><td>0x100–0x10C</td><td>CYCLE / STALL_IN / STALL_OUT / FRAME_COUNT</td><td>RO</td><td>performans sayaçları (datapath'ten giriş)</td></tr>
+</table>
+<p class="muted">W1S = “1 yazınca set/tetikle”, W1C = “1 yazınca temizle”, RO = salt okunur, RAZ/WI = okunursa 0, yazılırsa yok sayılır.</p>
+<h4>Shadow + commit protokolü</h4>
+<figure>
+<svg viewBox="0 0 680 190" xmlns="http://www.w3.org/2000/svg" font-size="10">
+  <defs><marker id="ar8" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker></defs>
+  <rect x="10" y="30" width="120" height="56" rx="5" fill="#e6eefb" stroke="#3b6fc4"/>
+  <text x="70" y="50" text-anchor="middle" font-weight="700">PS: 24 yazma</text><text x="70" y="66" text-anchor="middle" font-size="9">8 banka × (bias,M0,shift)</text><text x="70" y="78" text-anchor="middle" font-size="9">sıra serbest</text>
+  <rect x="160" y="30" width="125" height="56" rx="5" fill="#fff" stroke="#1d2330"/>
+  <text x="222" y="50" text-anchor="middle" font-weight="700">shadow[0..7]</text><text x="222" y="66" text-anchor="middle" font-size="9">+ written_mask (24 bit)</text><text x="222" y="78" text-anchor="middle" font-size="9">her yazma bir bit set eder</text>
+  <rect x="315" y="30" width="100" height="56" rx="5" fill="#e6eefb" stroke="#3b6fc4"/>
+  <text x="365" y="54" text-anchor="middle" font-weight="700">COMMIT</text><text x="365" y="70" text-anchor="middle" font-size="9">0x0C0 ← 1</text>
+  <polygon points="490,18 560,58 490,98 420,58" fill="#fff4d6" stroke="#b07800"/>
+  <text x="490" y="50" text-anchor="middle" font-size="9">mask=FFFFFF?</text><text x="490" y="62" text-anchor="middle" font-size="9">M0∈[2¹⁶,2¹⁷)?</text><text x="490" y="74" text-anchor="middle" font-size="9">busy değil?</text>
+  <g stroke="#1d2330" marker-end="url(#ar8)"><line x1="130" y1="58" x2="158" y2="58"/><line x1="285" y1="58" x2="313" y2="58"/><line x1="415" y1="58" x2="420" y2="58"/>
+  <line x1="560" y1="58" x2="590" y2="58"/><line x1="490" y1="98" x2="490" y2="128"/></g>
+  <rect x="592" y="30" width="82" height="56" rx="5" fill="#e5f4ea" stroke="#2f8f4e"/>
+  <text x="633" y="48" text-anchor="middle" font-weight="700">evet</text><text x="633" y="63" text-anchor="middle" font-size="9">active←shadow</text><text x="633" y="76" text-anchor="middle" font-size="9">COMMITTED=1</text>
+  <rect x="420" y="130" width="140" height="48" rx="5" fill="#fbe9e7" stroke="#b3372c"/>
+  <text x="490" y="149" text-anchor="middle" font-weight="700">hayır</text><text x="490" y="165" text-anchor="middle" font-size="9">ERROR biti; active değişmez</text>
+  <text x="14" y="130" font-size="10">Sonra: CONTROL.START → yalnız</text>
+  <text x="14" y="145" font-size="10">COMMITTED=1 (PARAM_SRC=0) veya</text>
+  <text x="14" y="160" font-size="10">TABLE_VALID=1 (PARAM_SRC=1) ise</text>
+  <text x="14" y="175" font-size="10">start darbesi; yoksa ERR_PARAM_INCOMPLETE.</text>
+</svg>
+<figcaption>Şekil 9 — Parametre yükleme. 24 kelime AXI4-Lite'ta atomik yazılamaz; yarım yüklenmiş setle başlamak sessiz yanlış sonuç verir.</figcaption>
+</figure>
+<ul>
+  <li><b>Neden <code>ERR_CFG_M0</code> zorunlu?</b> Reset sonrası M0=0, n=0, bias=0: cihaz hatasız çalışır ve her şeye <code>y = 0</code> der. <code>n=0</code> yasal olduğu
+  için tek yakalama noktası M0 aralığı (<code>axi_lite_regs.sv:279-281, 294-297</code>).</li>
+  <li><b>BUSY iken:</b> shadow'a yazmak serbest (sonraki tile hazırlanabilir), commit reddedilir → <code>ERR_CFG_WR_BUSY</code> (bit 3).</li>
+  <li><b>W1C yarışı:</b> aynı cycle'da yazılım temizler ve donanım set ederse önce temizleme, sonra OR — olay kaybolmaz (satır 349-351).</li>
+  <li><b>Çıkışlar:</b> <code>cfg_bias_q[0:7]</code>, <code>cfg_m0[0:7]</code>, … unpacked diziler — her requant_unit'e doğrudan bağlanacak. <code>cfg_bypass = TILE_CFG[16]</code>.</li>
+  <li><b>SOFT_RESET</b> ayrıca <code>counter_clear</code> darbesi üretir; sayaçlar datapath'te yaşadığı için orada sıfırlanacak.</li>
+  <li><b>PARAM_SRC=1</b> (BRAM'den tablo) yolu henüz yok; <code>table_valid</code> girişi ve STATUS[4] guard'ı şimdiden konmuş (sonradan eklemek map'i kırar).</li>
+</ul>
+
+<!-- ============================== §8 ============================== -->
+<h2>§8 Python model tarafı</h2>
+<div class="box warn"><b class="t">Önce netlik: “model” iki anlamda</b>
+(1) <b>Golden reference model'ler</b> — donanımın ne üretmesi gerektiğini hesaplayan saf Python (stdlib-only, numpy yok). Bunlar repoda, çalışıyor.
+(2) <b>ML modeli</b> (PyTorch LeNet-5 eğitimi, PTQ kalibrasyonu, ağırlık export'u) — Kişi A'nın hattı. <b>Repoda henüz hiç PyTorch kodu yok.</b>
+ADR'ler bu hattın ne üretmesi gerektiğini tanımlıyor (§8.6).</div>
+
+<h3>§8.1 engine_ref.py — compute_engine'in golden modeli (82 satır)</h3>
+<pre>def engine_ref(A, B, active_rows, active_cols, k_len):
+    for r, c:  acc = wrap32(Σ_k A[r][k]·B[k][c])      <span class="c"># matematik, cycle yok</span>
+    drain = [(r, c, result[r][c]) for c in cols for r in rows]   <span class="c"># kolon-major çıkış sırası</span></pre>
+<p><code>wrap32(v)</code>: 32 bit'e maskele, bit 31 set ise 2³² çıkar → signed INT32 yorumu. Self-check'te K=131.073'lük taşma vakası da var.
+Testbench (<code>tb_compute_engine</code>) aynı matematiği SV içinde yeniden yapıyor; bu dosya sözleşmenin referans tanımı.</p>
+
+<h3>§8.2 verify_architecture.py — bağımsız cycle modeli (88 satır)</h3>
+<p>engine_ref “ne” hesaplandığını söyler; bu dosya “nasıl” — diziyi cycle cycle simüle eder:</p>
+<pre>for cycle in range(k_len + rows + cols - 2):
+    PE(r,0) a_in = a[r][cycle - r]        <span class="c"># skew: indeks = cycle − satır</span>
+    PE(0,c) b_in = b[cycle - c][c]        <span class="c"># skew: indeks = cycle − kolon</span>
+    diğer PE'ler: soldaki/üstteki komşunun bir önceki cycle değeri
+    if av and bv: acc += a·b ; mac_count += 1</pre>
+<p>Üç şeyi kanıtlar: sonuç golden ile aynı, MAC sayısı tam <code>rows·cols·K</code> (fazla/eksik MAC yok), süre tam <code>K+rows+cols−2</code>.
+Çıktı (2026-10-02): 4/4 case PASS (8×8×8 → 22 cycle, 3×5×7 → 13, 1×1×1 → 1, 8×2×5 → 13).</p>
+
+<h3>§8.3 window_ref.py — pencere akışı golden modeli (86 satır)</h3>
+<p>HWC düz frame'den <code>(k, values[8], active_cols)</code> listesi üretir — §6.2'deki döngünün birebir Python hâli. İndeks:
+<code>frame[(h·in_w + w)·c_in + ci]</code>. Byte'ları signed INT8'e çevirir (≥128 → −256). Self-check'teki küçük örnekte her koordinat farklı
+bir değere sahip; böylece HWC/CHW karışıklığı veya k sırası hatası testten kaçamaz.</p>
+
+<h3>§8.4 requant_ref.py — ADR-003'ün golden modeli (135 satır)</h3>
+<pre>def requant_raw_ref(acc, m0, n):          <span class="c"># clamp öncesi (out_y_raw ile karşılaştırılır)</span>
+    half_ulp = 0 if n == 0 else 1 &lt;&lt; (n-1)
+    return (acc * m0 + half_ulp) &gt;&gt; n     <span class="c"># Python int: sınırsız, &gt;&gt; = floor</span>
+def requant_ref(acc, m0, n, relu_en):
+    return max(0 if relu_en else -128, min(127, requant_raw_ref(acc, m0, n)))</pre>
+<h4>Tie vektörü üreteci — en zekice kısım</h4>
+<p>İstenen: <code>acc·m0 ≡ 2ⁿ⁻¹ (mod 2ⁿ)</code> (tam yarı). m0 tek sayıysa mod 2ⁿ'de tersi vardır:</p>
+<pre>inv  = pow(m0, -1, 2**n)                 <span class="c"># m0 · inv ≡ 1 (mod 2ⁿ)</span>
+base = (2**(n-1) * inv) % 2**n           <span class="c"># base · m0 ≡ 2ⁿ⁻¹  → ilk tie</span>
+ties = [base + j·2**n  for j in -50..50  if INT32 içinde]   <span class="c"># 101 farklı tie</span></pre>
+<p>Tuzak (yorumda): <code>j·2ⁿ</code> çarpımın içine konursa mod alınırken yok olur → aynı değer 101 kez. Doğru yer: toplamın dışı.
+<code>python requant_ref.py</code> çıktısı: “101 distinct ties, 51 disagree with nearest-even, 0/200000 random draws hit a tie”.
+<code>boundary_vectors</code>: INT8 sınırlarına (−129…128) denk gelen acc'ler. <code>all_test_accs</code> = {0, ±1, INT32 uçları} + tie + sınır + 10.000 rastgele.</p>
+
+<h3>§8.5 gen_requant_vectors.py — XSim için vektör dosyaları (161 satır)</h3>
+<table>
+  <tr><th>Vektör grubu</th><th>Ne test eder</th></tr>
+  <tr><td>3 kanal (M0,n) = (98765,20), (131071,31), (65537,1) × relu{0,1} × all_test_accs</td><td>Ana sayısal kapsam, tie dahil</td></tr>
+  <tr><td>n ∈ {0,49,50,63} × acc uçları</td><td>64-bit offset kenarları</td></tr>
+  <tr><td>8 bias × 7 acc × relu</td><td>S0 bias toplamı ve INT32 wrap/ovf</td></tr>
+  <tr><td>7 bias × 5 acc × relu, bypass=1</td><td>Bypass yolu: raw = a, sat = 0</td></tr>
+  <tr><td>a=2000 çifti (bypass 0/1)</td><td>Aynı değer: yalnız quantize örnek sat bildirir</td></tr>
+</table>
+<p>Toplam <b>60.750 vektör</b> (2026-10-02'de sayıldı). Her alan ayrı bir <code>sim/vectors/req_&lt;alan&gt;.mem</code> dosyasına, satır başına bir
+hex kelime olarak yazılır (<code>req_acc.mem</code>, <code>req_y.mem</code>, <code>req_raw.mem</code> …, sayı <code>req_count.mem</code>'de). Negatif sayılar
+sabit genişlikli two's complement hex'e çevrilir (<code>signed_hex(-1, 32) = FFFFFFFF</code>); <code>self_check_writer</code> bunun geri dönüşünü test eder.
+Testbench bunları <code>$readmemh</code> ile okur. Dosyalar ~4 MB ve deterministik (seed=0), commit edilmez; <code>run_tests.py</code> eksikse üretir.</p>
+
+<h3>§8.6 Kişi A'nın hattı — henüz yazılmamış ama tanımlı <span class="badge b-todo">YOK</span></h3>
+<ol class="steps">
+  <li>LeNet-5'i PyTorch'ta eğit (önce MNIST referans, sonra böcek veri seti; RGB, kanal başına normalizasyon).</li>
+  <li>PTQ kalibrasyonu: ağırlık <code>per_channel_symmetric</code>, aktivasyon <code>per_tensor_symmetric</code>, <code>qint8</code>. PyTorch'un quantized runtime'ına
+  güvenme (FBGEMM qint8 aktivasyonu reddediyor) — observer'ları yalnız scale çıkarmak için kullan.</li>
+  <li>Her katman/kanal için <code>M0, n, bias_q</code> hesapla (§4.1). Overflow koşulunu kontrol et: <code>|bias_q| + K·16384 ≤ 2³¹−1</code>.</li>
+  <li>Ağırlıkları <code>[co][ci][kh][kw]</code> sırasıyla, <code>bank = co mod 8</code>, <code>addr = t·K + k</code> ile katman başına 8 <code>.coe</code> dosyasına yaz.
+  FC1 için HWC permütasyonu (§2.3). FC2 kanallarını 88'e sıfır dolgula.</li>
+  <li>Girdi görüntüsünü <code>x.permute(0,2,3,1)</code> ile HWC yap, <code>tobytes()</code>.</li>
+  <li>NumPy'da <b>integer golden model</b> yaz: MAC'ler <code>wrap32</code>, requant Python int/np.int64 ile — bu, tam ağ seviyesinde RTL'in referansı olacak.</li>
+</ol>
+
+<!-- ============================== §9 ============================== -->
+<h2>§9 Doğrulama: testbench'ler ve run_tests.py</h2>
+
+<h3>§9.1 Felsefe</h3>
+<ul>
+  <li><b>Self-checking:</b> her testbench beklenen değeri kendisi bilir, sonunda tek satır <code>PASS tb_x</code> veya <code>FAIL …</code> basar. Dalga formuna bakmak gerekmez.</li>
+  <li><b>Dosya tabanlı köprü:</b> Python vektör üretir → <code>$readmemh</code> → karşılaştırma SV içinde (cocotb yok, ADR-017).</li>
+  <li><b>“Hata yokluğu başarı değildir”:</b> erken biten bir XSim koşusu da 0 döner. PASS satırı yoksa test kırmızı.</li>
+  <li><b>DUT içinde test kancası yok:</b> testbench modülün içine hiyerarşik referansla bakmaz (ADR-014) — <code>out_y_raw</code> bu yüzden gerçek port.</li>
+</ul>
+
+<h3>§9.2 Altı testbench</h3>
+<table>
+  <tr><th>Testbench</th><th>Test ID</th><th>Neyi kanıtlıyor</th></tr>
+  <tr><td><code>tb_pe_os</code> (98)</td><td>—</td><td>−128×127 signed sınır (−16256), ikinci MAC (128), step=0'da donma, invalid bubble'da MAC yok, clear, flush'ın valid'leri silmesi</td></tr>
+  <tr><td><code>tb_compute_engine</code> (323)</td><td>T_ENG_KSTREAM_001<br>T_ENG_SKEW_001<br>T_ENG_WRAP_001<br>T_ENG_CONFIG</td><td>K=75/150/400 (ağın gerçek K'ları) 8×8; 5×6×11 (her r,c,k değeri farklı → hizalama hatası kaçamaz); partial tile'lar 1×1, 3×5; rastgele tek-taraflı stall'lar; K=131.073 ile INT32 wrap; geçersiz start reddi. Scoreboard her drain beat'inde kolon, lane_valid, k_last, out_last ve 8 değeri kontrol eder</td></tr>
+  <tr><td><code>tb_window_gen</code> (414)</td><td>—</td><td>Gerçek parametre setleri: conv1 (32×32×3), conv2 (14×14×6), FC1 (1×1×400). conv1 iki kez: stall'sız ve rastgele giriş boşlukları + çıkış stall'larıyla — ikisi aynı olmalı. <b>Entegrasyon:</b> ilk conv1 tile'ı gerçek <code>compute_engine</code>'e bağlanıp 6 kanal × 8 kolon golden toplamla karşılaştırılıyor — projenin <b>ilk gerçek convolution'ı</b></td></tr>
+  <tr><td><code>tb_requant_unit_num</code> (206)</td><td>T_NUM_REQ_001</td><td>60.750 vektör bit-exact: y, y_raw (clamp öncesi), sat, ovf, last</td></tr>
+  <tr><td><code>tb_requant_unit_timing</code> (312)</td><td>T_REQ_TIMING_001</td><td>Stall yokken tam LAT=3 gecikme, korunum (kabul = üretilen + bekleyen), uzun stall/tek cycle boşluk/burst, reset, <code>in_last ∧ ¬in_k_last</code> yasak girişinde çıkış üretmeme</td></tr>
+  <tr><td><code>tb_axi_lite_regs</code> (360)</td><td>T_REG_PARAM_001</td><td>Commit öncesi START reddi; eksik kelimeyle commit reddi; geçersiz M0 reddi; BUSY'de commit reddi; geçerli commit sonrası 8 bankanın ayrı değerleri; START/SOFT_RESET darbeleri; PARAM_SRC=1 guard'ı; W1C (donanım aynı anda set ederken); haritasız adres → 0; AW-ortasında reset; AW/W sıra bağımsızlığı</td></tr>
+</table>
+
+<h3>§9.3 run_tests.py — regresyon koşucusu (231 satır)</h3>
+<figure>
+<svg viewBox="0 0 680 110" xmlns="http://www.w3.org/2000/svg" font-size="10">
+  <defs><marker id="ar9" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#1d2330"/></marker></defs>
+  <g fill="#e6eefb" stroke="#3b6fc4"><rect x="5" y="25" width="118" height="56" rx="5"/><rect x="140" y="25" width="118" height="56" rx="5"/><rect x="275" y="25" width="118" height="56" rx="5"/><rect x="410" y="25" width="118" height="56" rx="5"/><rect x="545" y="25" width="130" height="56" rx="5"/></g>
+  <g text-anchor="middle"><text x="64" y="45" font-weight="700">1. hazırlık</text><text x="64" y="60" font-size="9">ASCII yol guard'ı</text><text x="64" y="72" font-size="9">vektör yoksa üret</text>
+  <text x="199" y="45" font-weight="700">2. xvlog -sv</text><text x="199" y="60" font-size="9">tüm rtl/*.sv + tb/*.sv</text><text x="199" y="72" font-size="9">derle (--incr)</text>
+  <text x="334" y="45" font-weight="700">3. xelab</text><text x="334" y="60" font-size="9">her tb_* için</text><text x="334" y="72" font-size="9">snapshot elaborate</text>
+  <text x="469" y="45" font-weight="700">4. xsim -runall</text><text x="469" y="60" font-size="9">çıktıyı yakala</text>
+  <text x="610" y="45" font-weight="700">5. karar</text><text x="610" y="60" font-size="9">exit 0 ∧ “PASS” ∧</text><text x="610" y="72" font-size="9">¬FAIL/ERROR/$error</text></g>
+  <g stroke="#1d2330" marker-end="url(#ar9)"><line x1="123" y1="53" x2="138" y2="53"/><line x1="258" y1="53" x2="273" y2="53"/><line x1="393" y1="53" x2="408" y2="53"/><line x1="528" y1="53" x2="543" y2="53"/></g>
+  <text x="340" y="102" text-anchor="middle" font-size="9.5">Testler otomatik bulunur: tb/*.sv içinde “module tb_…” regex'i. Build dizini sim/build, başarıda silinir.</text>
+</svg>
+<figcaption>Şekil 10 — run_tests.py akışı. Vivado yolu: $VIVADO_BIN → $XILINX_VIVADO/bin → bilinen kurulum yolları → PATH.</figcaption>
+</figure>
+<pre>python sim\run_tests.py                <span class="c"># hepsi (son durum: 6/6 PASS)</span>
+python sim\run_tests.py tb_pe_os       <span class="c"># tek test</span>
+python sim\run_tests.py --list         <span class="c"># bulunan testler</span>
+python sim\run_tests.py -v --keep      <span class="c"># tüm çıktıyı göster, build dizinini sakla</span></pre>
+<p><b>Neden XSim, cocotb+Icarus değil?</b> ADR-009 Vivado'nun kurulu olmadığını varsayıp cocotb+Icarus seçmişti. Vivado 2025.1 kurulu çıktı;
+XSim hem SVA assertion'larını hem şifreli Xilinx IP'sini (AXI VIP, DMA) koşturuyor, Icarus ikisini de koşturamıyor. Ayrıca cocotb yolunda
+<code>T_NUM_REQ_001</code> 15 gün hiç koşmamıştı çünkü araçlar kurulu değildi (ADR-017).</p>
+
+<h3>§9.4 Doğrulama kademeleri (ADR-017)</h3>
+<table>
+  <tr><th>Kademe</th><th>Ortam</th><th>Durum</th></tr>
+  <tr><td>1</td><td>XSim, saf RTL + dosya vektörü (birim testleri)</td><td><span class="badge b-ok">VAR — 6/6</span></td></tr>
+  <tr><td>2</td><td>XSim + <code>axi_vip</code> + <code>axi4stream_vip</code> (IP kontratı, backpressure, byte lane)</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>3</td><td>XSim + <code>processing_system7_vip</code> + <code>axi_dma</code> + block design (uçtan uca)</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>4</td><td>Kart: PYNQ Python overlay</td><td><span class="badge b-todo">Aşama 2</span></td></tr>
+  <tr><td>5</td><td>Kart: Vitis bare-metal C (AXI-Lite yazma gecikmesi ölçümü)</td><td><span class="badge b-todo">Aşama 2</span></td></tr>
+</table>
+<p class="muted">Not: <code>processing_system7_vip</code> C kodu koşturmaz; sürücünün yapacağı register/DMA dizisi SV task'larıyla yazılır. “Vitis ile emülasyon”
+elendi: Zynq-7000 için acceleration platformu ve XRT yok, QEMU da PL'i modellemiyor.</p>
+
+<!-- ============================== §10 ============================== -->
+<h2>§10 Vivado akışı ve sentez sonuçları</h2>
+
+<h3>§10.1 Üç dosya</h3>
+<table>
+  <tr><th>Dosya</th><th>Rolü</th></tr>
+  <tr><td><code>vivado/create_project.tcl</code></td><td><b>Tezgâh.</b> GUI projesini kurar veya varsa açar. Tüm <code>rtl/*.sv</code> (bağlanmamışlar dahil) + <code>tb/*.sv</code> + XDC.
+  Synth top <code>systolic_array_8x8</code>, sim top <code>tb_compute_engine</code>. Vektörler için sim dizinine junction (<code>mklink /J</code>) atar. Proje
+  <code>vivado/.project/</code> altında, commit edilmez — kanonik kaynak bu script (ADR-001).</td></tr>
+  <tr><td><code>vivado/check_synth.tcl</code></td><td><b>Kapı.</b> Batch OOC sentez; <code>filelist.f</code>'teki 4 dosya. DSP48 sayısı ≠ 64 → exit 2; timing yolu yok → exit 3; WNS &lt; 0 → exit 4.
+  Raporları <code>reports/</code>'a yazar.</td></tr>
+  <tr><td><code>vivado/constraints.xdc</code></td><td>Tek satır: <code>create_clock -name clk -period 10.000 [get_ports clk]</code> (100 MHz).</td></tr>
+</table>
+<pre>vivado -source vivado\create_project.tcl                 <span class="c"># GUI</span>
+vivado -mode batch -source vivado\check_synth.tcl        <span class="c"># sentez kapısı</span></pre>
+<div class="box"><b class="t">Neden clock bir XDC'de? (yarım gün kaybettiren tuzak)</b>
+<code>create_clock</code> <code>synth_design</code>'dan <b>önce</b> çağrılırsa “No open design” hatası (henüz port yok); <b>sonra</b> çağrılırsa sentezi hiç kısıtlamaz.
+<code>read_xdc</code> değerlendirmeyi elaboration'a erteler — hem çalışan hem doğru tek sıralama.</div>
+<div class="box"><b class="t">OOC (out-of-context) nedir?</b>
+Modül tek başına, I/O pinlerine bağlanmadan sentezlenir (I/O buffer eklenmez). Çekirdeğin alan/timing'ini block design olmadan ölçmenin yolu.</div>
+
+<h3>§10.2 Ölçülen sonuçlar (2026-09-26, Vivado 2025.1)</h3>
+<table>
+  <tr><th>Kaynak</th><th class="n">Kullanılan</th><th class="n">XC7Z020</th><th class="n">Oran</th><th>Yorum</th></tr>
+  <tr><td><b>DSP48E1</b></td><td class="n"><b>64</b></td><td class="n">220</td><td class="n">%29,1</td><td>Tam 1 PE = 1 DSP (netlist'te sayıldı)</td></tr>
+  <tr><td>Slice LUT</td><td class="n">1.160</td><td class="n">53.200</td><td class="n">%2,2</td><td>Çekirdek alan olarak çok küçük</td></tr>
+  <tr><td>Flip-flop</td><td class="n">960</td><td class="n">106.400</td><td class="n">%0,9</td><td></td></tr>
+  <tr><td>SRL</td><td class="n">56</td><td class="n">—</td><td class="n">—</td><td>Skew gecikme bankaları</td></tr>
+  <tr><td>BRAM</td><td class="n">0</td><td class="n">140</td><td class="n">—</td><td>Bellekler henüz top'ta değil</td></tr>
+  <tr><td><b>WNS @ 100 MHz</b></td><td class="n" colspan="3"><b>+3,074 ns</b></td><td>Timing 3 ns marjla kapanıyor</td></tr>
+</table>
+<p><b>WNS</b> (worst negative slack): en kötü yolun ne kadar erken bittiği. Pozitif = timing karşılanıyor. 10 ns periyotta en uzun yol ~6,9 ns.
+Tahmini tam bütçe: 64 (dizi) + 8×2 (requant) = 80 DSP, %36.</p>
+<div class="box warn"><b class="t">Kapsam sınırı</b>
+Bu sayılar yalnız <code>compute_engine</code> + diziyi kapsıyor. line_buffer, window_gen, requant_unit ve axi_lite_regs hiç sentezlenmedi;
+ADR-014'ün <code>LAT=3</code> değeri gerçek STA ile hâlâ doğrulanmadı.</div>
+
+<!-- ============================== §11 ============================== -->
+<h2>§11 Uçtan uca: bir frame'in yolculuğu</h2>
+
+<h3>§11.1 Adım adım (hedef sistem)</h3>
+<table>
+  <tr><th>#</th><th>Adım</th><th>Kim</th><th>Durum</th></tr>
+  <tr><td>0</td><td>Offline: eğit, kalibre et, (M0,n,bias_q) + ağırlık .coe'leri üret; ağırlıklar bitstream'e gömülür</td><td>Kişi A script'leri</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>1</td><td>PS <code>LAYER_CFG</code>/<code>TILE_CFG</code> yazar; 24 parametre yazması + <code>PARAM_COMMIT</code></td><td>axi_lite_regs</td><td><span class="badge b-warn">BİRİM</span></td></tr>
+  <tr><td>2</td><td>PS DMA MM2S'i kurar: DDR'deki 3072 B HWC frame → 384 AXIS beat (TLAST son beat'te)</td><td>AXI DMA</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>3</td><td>PS <code>CONTROL.START</code> → layer sequencer katman/tile döngüsünü başlatır</td><td>layer sequencer (WP8)</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>4</td><td>line_buffer beat'leri 8 bankalı 5 satırlık halkaya yazar</td><td>line_buffer</td><td><span class="badge b-warn">BİRİM</span></td></tr>
+  <tr><td>5</td><td>window_gen her (out_y, tile_x, k) için 8 pikselli beat üretir → B-top</td><td>window_gen</td><td><span class="badge b-warn">BİRİM</span></td></tr>
+  <tr><td>6</td><td>Ağırlık BRAM'leri aynı adresle (<code>t·K + k</code>) 8 kanalın ağırlığını verir → A-left</td><td>weight memory (WP4)</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>7</td><td>compute_engine: CLEAR → FEED (K) → FLUSH (14) → DRAIN (8 kolon × 8 INT32)</td><td>compute_engine</td><td><span class="badge b-ok">SENTEZDE</span></td></tr>
+  <tr><td>8</td><td>8 requant_unit: bias + M0 + shift + ReLU-clamp → 8 × INT8</td><td>requant_unit ×8</td><td><span class="badge b-warn">BİRİM</span></td></tr>
+  <tr><td>9</td><td>MaxPool 2×2 + paketleme; çıktı ping-pong tampona (<code>[c_tile][H][W][8]</code>)</td><td>WP6 + tampon</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>10</td><td>Sonraki katman: tampon window_gen'e girdi olur (conv2, sonra FC1–3 = 1×1 conv)</td><td>sequencer</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>11</td><td>FC3: <code>REQ_BYPASS=1</code> → 10 × INT32 logit</td><td>requant_unit</td><td><span class="badge b-warn">BİRİM</span></td></tr>
+  <tr><td>12</td><td>Sonuç paketi 48 B = 6 beat: 5 beat logit + STATUS (argmax, sat_seen, acc_ovf_seen, frame_id) → S2MM → DDR</td><td>packer + DMA</td><td><span class="badge b-todo">YOK</span></td></tr>
+  <tr><td>13</td><td>PS DONE'u görür (STATUS[2] veya IRQ), sonucu okur, frame_id'yi doğrular</td><td>sürücü</td><td><span class="badge b-todo">YOK</span></td></tr>
+</table>
+
+<h3>§11.2 Bugün gerçekten çalışan zincir</h3>
+<p><code>tb_window_gen</code>'in entegrasyon testi: 3072 byte'lık sentetik conv1 frame'i → line_buffer → window_gen → <b>gerçek</b>
+compute_engine (6 kanal, ağırlıklar testbench'ten) → 8 kolonun 6×8 INT32 sonucu golden toplamla eşleşiyor. Yani 4→5→7 adımları
+birlikte çalıştı; 1, 8, 11 ayrı ayrı doğrulandı. Gerisi yazılmadı.</p>
+
+<h3>§11.3 Performans</h3>
+<p>Tile başına cycle (ADR-018): <code>K + (rows−1) + (cols−1) + cols + 1</code>. ADR-018'in ağ seviyesi hesabı:</p>
+<table>
+  <tr><th>Katman</th><th class="n">Tile</th><th class="n">Cycle/tile</th><th class="n">Toplam cycle</th><th class="n">Verim</th></tr>
+  <tr><td>Conv1</td><td class="n">98</td><td class="n">96</td><td class="n">9.408</td><td class="n">%58,6</td></tr>
+  <tr><td>Conv2</td><td class="n">26</td><td class="n">173</td><td class="n">4.498</td><td class="n">%83,4</td></tr>
+  <tr><td>FC1</td><td class="n">15</td><td class="n">409</td><td class="n">6.135</td><td class="n">%12,2</td></tr>
+  <tr><td>FC2</td><td class="n">11</td><td class="n">129</td><td class="n">1.419</td><td class="n">%11,1</td></tr>
+  <tr><td>FC3</td><td class="n">2</td><td class="n">93</td><td class="n">186</td><td class="n">%7,1</td></tr>
+  <tr><th>Toplam</th><th class="n">152</th><th></th><th class="n">21.646 ≈ 216 µs</th><th class="n">%47,0</th></tr>
+</table>
+<p><b>İki rakamı karıştırma:</b> %96,6 = engine tam bir tile'da ne kadar verimli (tasarım kalitesi). %47,0 = bu ağ bu donanımın ne kadarını
+kullanıyor (iş yükü uyumu). Fark FC'den: batch=1 → N=1 → 64 PE'nin 8'i çalışıyor. FC'ler zamanın %35,8'ini alıp MAC'lerin %9'unu yapıyor.
+Çözüm (Aşama 2'ye park): K-split + adder tree → ~%70, ~146 µs.</p>
+
+<div class="box warn"><b class="t">Agâh gözlemi — bu tablo ideal besleme varsayıyor</b>
+<p>(1) Tablo conv1'de N=784'ü 98 tam tile'a paketliyor. Ama <code>window_gen</code> satır satır tile'lıyor: her 28 piksellik satır 8+8+8+4 → <b>112 tile</b>.
+Conv2'de (10 piksellik satır: 8+2) ve M=16 iki kanal tile'ı → <b>40 tile</b> (26 değil). Sadece engine süresiyle hesaplarsam:
+conv1 10.528, conv2 6.680 cycle; ağ toplamı ~24.950 cycle ≈ 250 µs.</p>
+<p>(2) Daha büyük etki: window_gen beat başına ≥9 cycle harcıyor (§6.2). Engine FEED'de her beat için bekleyecek → conv katmanlarında
+K cycle değil ~9K cycle. Kaba tahmin: tüm ağ ~200.000 cycle ≈ <b>~2 ms/frame</b> (216 µs'nin ~9 katı). FC'ler de window_gen'den beslenirse aynı oran.</p>
+<p>(3) Conv2'nin 2 kanal tile'ı için girdi ya iki kez akıtılmalı ya da window_gen çıktısı tekrar kullanılmalı — bugünkü window_gen her pencereyi
+bir kez üretiyor. Bu, WP8'in açık sözleşmesine (ADR-018 ek madde 3) dahil.</p>
+<p>Hızlandırma fikri: 8 lane'i paralel okumak. conv1'de (C_IN=3) lane'lerin byte adresleri 3'er aralıklı → 8 bankaya çakışmasız dağılıyor (3 ile 8 aralarında asal).
+conv2'de (C_IN=6, gcd(6,8)=2) çakışıyor. Yani paralel gather katmana bağlı bir banka eşlemesi ister. Bunlar benim hesabım — tartışma için.</p></div>
+
+<h3>§11.4 Açık sorular ve gözlemler (toplu)</h3>
+<table>
+  <tr><th>#</th><th>Konu</th><th>Kaynak</th></tr>
+  <tr><td>1</td><td>window_gen besleme hızı (≥9 cycle/beat) ve giriş/hesap örtüşmemesi — gerçek frame süresi ~2 ms mertebesinde olabilir</td><td>Agâh, §6.2, §11.3</td></tr>
+  <tr><td>2</td><td>Tile sayıları: ADR-018 tablosu düz N paketlemesi varsayıyor, RTL satır bazlı tile'lıyor</td><td>Agâh, §11.3</td></tr>
+  <tr><td>3</td><td>line_buffer: <code>ram_style="block"</code> + asenkron okuma → BRAM'e haritalanamaz; sentezde kontrol</td><td>Agâh, §6.1</td></tr>
+  <tr><td>4</td><td>Reset: ADR-008/014 “async assert, sync deassert” diyor; RTL'deki tüm modüller senkron reset. SoC'de bir reset senkronizatörü bunu uzlaştırır — block design rehberinde yazılmalı</td><td>Agâh</td></tr>
+  <tr><td>5</td><td>window_gen ↔ compute_engine metadata/start sözleşmesi (kim start üretir, active_cols ne zaman geçerli) — WP8'i bloke ediyor</td><td>ADR-018 ek madde 3</td></tr>
+  <tr><td>6</td><td><code>LAT=3</code> STA ile ölçülmedi (requant sentezlenmedi)</td><td>ADR-014</td></tr>
+  <tr><td>7</td><td>Vivado 2025.1 ile eşleşen PYNQ image sürümü doğrulanmadı — Aşama 2'nin ilk işi</td><td>ADR-001</td></tr>
+  <tr><td>8</td><td>ADR-014/015/016/018 hâlâ “önerildi — Kişi B onayı bekliyor”</td><td>ADR'ler</td></tr>
+  <tr><td>9</td><td>Sıfırdan farklı padding için sınır politikası yok (Aşama 1 PAD=0, bloke etmiyor)</td><td>README, ADR-018</td></tr>
+</table>
+
+<!-- ============================== §12 ============================== -->
+<h2>§12 Karar haritası ve yol haritası</h2>
+
+<h3>§12.1 ADR'ler tek satırda</h3>
+<table>
+  <tr><th>ADR</th><th>Karar</th><th>Durum</th></tr>
+  <tr><td>001</td><td>PYNQ-Z2, Vivado 2025.1, proje Tcl olarak saklanır</td><td>kabul (PYNQ image açık uç)</td></tr>
+  <tr><td>002</td><td>LeNet-5, 32×32 RGB, 5×5 valid conv, 10 sınıf, batch 1</td><td>kabul</td></tr>
+  <tr><td>003</td><td>INT8 simetrik, per-channel, INT32 wrap, 64-bit requant, round-half-up</td><td>kabul</td></tr>
+  <tr><td>004</td><td>8×8 = 64 PE = 64 DSP48 (%29) — sentezle doğrulandı</td><td>kabul</td></tr>
+  <tr><td>005</td><td>Direct convolution (line buffer + window gen), im2col yok</td><td>kabul</td></tr>
+  <tr><td>006</td><td>AXIS 64-bit, TLAST = frame sonu, TUSER yok, TKEEP hep 1</td><td>kabul</td></tr>
+  <tr><td>007</td><td>AXI DMA Simple mode (PYNQ SG desteklemiyor)</td><td>kabul</td></tr>
+  <tr><td>008</td><td>Tek clock domain, 100 MHz</td><td>kabul</td></tr>
+  <tr><td>009</td><td>Doğrulama ortamı (cocotb+Icarus) → ADR-017 ile değişti</td><td>kısmen geçersiz</td></tr>
+  <tr><td>011</td><td>Ağırlık: 8 banka, bank = c_out mod 8, addr = t·K + k, .coe</td><td>kabul</td></tr>
+  <tr><td>014</td><td>Requantizer portları, LAT, skid, k_last kapısı, bypass</td><td>önerildi</td></tr>
+  <tr><td>015</td><td>Register map, shadow/commit, ERR_CFG_M0, PARAM_SRC</td><td>önerildi</td></tr>
+  <tr><td>016</td><td>Aktivasyon HWC, little-endian byte lane, kanal dolgusu, 48 B sonuç paketi</td><td>önerildi</td></tr>
+  <tr><td>017</td><td>Tek simülatör XSim; 5 doğrulama kademesi; Vitis emülasyonu elendi</td><td>kabul</td></tr>
+  <tr><td>018</td><td>K-streaming (K tavanı yok), <code>[c_tile][H][W][8]</code>, ping-pong 2×8 KB</td><td>önerildi</td></tr>
+</table>
+<p class="muted">010, 012, 013 numaralı ADR'ler dosya olarak yok (010 BRAM ön-yükleme, 012 çalışma zamanı ağırlık yükleme — Aşama 2, 013 skip connection — Aşama 3).</p>
+
+<h3>§12.2 İş paketleri (WP)</h3>
+<table>
+  <tr><th>WP</th><th>İçerik</th><th>Durum</th></tr>
+  <tr><td>WP0</td><td>Test harness (XSim, run_tests.py)</td><td><span class="badge b-ok">bitti</span></td></tr>
+  <tr><td>WP1</td><td>Kontratlar + ADR ek maddeleri</td><td><span class="badge b-ok">bitti</span></td></tr>
+  <tr><td>WP2</td><td>requant_unit (60K vektör)</td><td><span class="badge b-ok">bitti</span></td></tr>
+  <tr><td>WP3</td><td>K-streaming compute_engine</td><td><span class="badge b-ok">bitti</span></td></tr>
+  <tr><td>WP4</td><td>Ağırlık belleği + ROM <code>.coe</code></td><td><span class="badge b-todo">sırada</span></td></tr>
+  <tr><td>WP5</td><td>line_buffer + window_gen</td><td><span class="badge b-ok">bitti</span></td></tr>
+  <tr><td>WP6</td><td>ReLU + MaxPool + output packer</td><td><span class="badge b-todo">sırada</span></td></tr>
+  <tr><td>WP7</td><td>AXI4-Lite register file</td><td><span class="badge b-ok">bitti</span></td></tr>
+  <tr><td>WP8</td><td>Layer sequencer (metadata sözleşmesine bağlı)</td><td><span class="badge b-todo">bloke</span></td></tr>
+  <tr><td>Sonra</td><td>Datapath entegrasyonu → AXIS/AXI sarmalayıcı → Kademe 2 (VIP) → Kademe 3 (PS VIP + DMA) → tam sistem sentezi</td><td><span class="badge b-todo">—</span></td></tr>
+</table>
+
+<!-- ============================== §13 ============================== -->
+<h2>§13 Sözlük</h2>
+<table>
+  <tr><th>Terim</th><th>Anlamı (bu projede)</th></tr>
+  <tr><td>MAC</td><td>Multiply-accumulate: <code>acc += a·b</code>. Bir PE cycle başına bir MAC yapar.</td></tr>
+  <tr><td>PE</td><td>Processing element: dizideki tek hesap hücresi (<code>pe_os</code>).</td></tr>
+  <tr><td>DSP48E1</td><td>7-series FPGA'daki sabit çarpıcı/toplayıcı bloğu (25×18 çarpıcı + 48-bit akümülatör). XC7Z020'de 220 tane.</td></tr>
+  <tr><td>Output-stationary</td><td>Kısmi toplam PE'de sabit, veri (ağırlık+aktivasyon) akar.</td></tr>
+  <tr><td>Skew / wavefront</td><td>Satır/kolon akışlarını indeksleri kadar geciktirip doğru verilerin doğru PE'de buluşmasını sağlamak; ortaya çıkan köşegen hesap deseni.</td></tr>
+  <tr><td>Tile</td><td>Çıktı matrisinin dizide bir seferde hesaplanan 8×8 (veya daha küçük, partial) parçası.</td></tr>
+  <tr><td>K / indirgeme</td><td>Bir çıktı için toplanan çarpım sayısı: c_in·kH·kW.</td></tr>
+  <tr><td>K-streaming</td><td>Tüm K'yı tek start boyunca akıtmak; dış kısmi toplam tamponu yok (ADR-018).</td></tr>
+  <tr><td>valid/ready</td><td>El sıkışma: veri yalnız ikisi de 1 olduğu cycle'da transfer olur.</td></tr>
+  <tr><td>Backpressure / stall</td><td>Alıcının ready'yi düşürerek göndereni bekletmesi.</td></tr>
+  <tr><td>Skid buffer</td><td>Ready register'lı olduğunda kaçan birkaç örneği tutan küçük kuyruk.</td></tr>
+  <tr><td>AXI4-Lite</td><td>Basit register erişim protokolü (5 kanal, burst yok). Kontrol düzlemi.</td></tr>
+  <tr><td>AXI4-Stream (AXIS)</td><td>Adressiz veri akışı: TDATA, TVALID, TREADY, TLAST (paket sonu), TKEEP (geçerli byte'lar).</td></tr>
+  <tr><td>DMA MM2S / S2MM</td><td>Memory-map-to-stream (DDR→PL) / stream-to-memory-map (PL→DDR).</td></tr>
+  <tr><td>PTQ / QAT</td><td>Post-training quantization (eğitim sonrası) / quantization-aware training.</td></tr>
+  <tr><td>Requantization</td><td>INT32 accumulator'ı bir sonraki katmanın INT8 ölçeğine çevirmek: <code>(a·M0 + half_ulp) &gt;&gt;&gt; n</code> + clamp.</td></tr>
+  <tr><td>Saturation / clamp</td><td>Aralık dışını sınıra kırpmak (INT8: −128…127).</td></tr>
+  <tr><td>Wrap</td><td>Taşmada mod 2³² dönmek (doğal donanım toplaması).</td></tr>
+  <tr><td>W1C / W1S</td><td>Write-1-to-clear / write-1-to-set register bitleri.</td></tr>
+  <tr><td>Shadow register</td><td>Yazılımın doldurduğu taslak kopya; commit ile aktif kopyaya atomik geçer.</td></tr>
+  <tr><td>HWC / CHW</td><td>Tensör bellek sırası: kanal en hızlı / genişlik en hızlı.</td></tr>
+  <tr><td>Golden model</td><td>Donanımın üretmesi gereken doğru cevabı hesaplayan referans yazılım.</td></tr>
+  <tr><td>Bit-exact</td><td>İki uygulamanın her bit'te aynı sonucu vermesi (tolerans yok).</td></tr>
+  <tr><td><code>$readmemh</code></td><td>Verilog'da hex metin dosyasını belleğe okuyan sistem görevi (satır başına bir kelime, soldaki hane MSB).</td></tr>
+  <tr><td>xvlog / xelab / xsim</td><td>XSim'in derleme / elaboration / simülasyon adımları.</td></tr>
+  <tr><td>SVA / assertion</td><td>SystemVerilog Assertions: simülasyonda sürekli kontrol edilen zamansal kurallar.</td></tr>
+  <tr><td>OOC sentez</td><td>Out-of-context: modülü I/O'suz tek başına sentezleme.</td></tr>
+  <tr><td>WNS</td><td>Worst negative slack: en kritik yolun timing marjı (pozitif = OK).</td></tr>
+  <tr><td>LUT / FF / SRL / BRAM</td><td>Lojik tablosu / flip-flop / LUT tabanlı shift register / 36 Kb blok RAM.</td></tr>
+  <tr><td>PS / PL</td><td>Processing system (ARM) / programmable logic (FPGA dokusu).</td></tr>
+</table>
+<p class="muted" style="margin-top:20px">Hazırlayan: Agâh · 2026-10-02 · Kaynak: <code>C:\grad-rtl</code> @ <code>16d9c62</code>. Sayısal örnekler ve vektör sayısı bu tarihte modeller çalıştırılarak üretildi.</p>
+
+</main>
+</body>
+</html>
