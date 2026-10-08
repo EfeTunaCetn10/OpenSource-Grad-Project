@@ -16,6 +16,7 @@ from model import LeNet5, count_parameters
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a 32x32 LeNet-5 baseline")
     parser.add_argument("--dataset", choices=("mnist", "insects"), required=True)
+    parser.add_argument("--model-version", choices=("v1", "v2"), default="v1")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--stats", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
@@ -23,6 +24,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--label-smoothing", type=float, default=0.0,
+                        help="Training cross-entropy smoothing only; validation remains unsmoothed")
     parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--limit-train", type=int)
@@ -35,6 +38,8 @@ def parse_args() -> argparse.Namespace:
                         help="Exponent for inverse-frequency weights (0.5 = square root)")
     parser.add_argument("--train-resize", action="store_true",
                         help="Resize full insect images instead of random crops; keep flip/color jitter")
+    parser.add_argument("--no-color-jitter", action="store_true",
+                        help="Disable training ColorJitter for the insect experiment only")
     parser.add_argument("--scheduler", choices=("plateau", "cosine"), default="plateau")
     return parser.parse_args()
 
@@ -122,8 +127,20 @@ def evaluate_with_macro_recall(
     return metrics
 
 
+def build_loss_functions(label_smoothing: float, class_weights=None):
+    """Keep validation CE comparable regardless of the training target smoothing."""
+    if not 0.0 <= label_smoothing <= 1.0:
+        raise ValueError("label smoothing must be finite and between 0 and 1")
+    return (nn.CrossEntropyLoss(weight=class_weights, label_smoothing=label_smoothing),
+            nn.CrossEntropyLoss())
+
+
 def main() -> None:
     args = parse_args()
+    if args.model_version == "v2" and args.dataset != "insects":
+        raise ValueError("experimental v2 supports the RGB insect dataset only")
+    if not 0.0 <= args.label_smoothing <= 1.0:
+        raise ValueError("label smoothing must be finite and between 0 and 1")
     if args.epochs <= 0 or args.batch_size <= 0:
         raise ValueError("epochs and batch size must be positive")
     if not 0.0 <= args.class_weight_power <= 1.0:
@@ -132,6 +149,8 @@ def main() -> None:
         raise ValueError("--class-weight-power requires --class-weighted")
     if args.train_resize and args.dataset != "insects":
         raise ValueError("--train-resize is only supported for insects")
+    if args.no_color_jitter and args.dataset != "insects":
+        raise ValueError("--no-color-jitter is only supported for insects")
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = device.type == "cuda"
@@ -157,20 +176,27 @@ def main() -> None:
             args.limit_train,
             args.limit_eval,
             train_resize=args.train_resize,
+            train_color_jitter=not args.no_color_jitter,
         )
 
     output_dir = args.output_dir / args.dataset
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Use a new output directory to preserve previous results: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    model = LeNet5(bundle.input_channels, len(bundle.class_names)).to(device)
-    criterion = nn.CrossEntropyLoss()
+    if args.model_version == "v2":
+        from model_v2 import LeNetV2
+        if bundle.input_channels != 3 or len(bundle.class_names) != 10:
+            raise ValueError("experimental v2 requires RGB inputs and 10 classes")
+        model = LeNetV2().to(device)
+    else:
+        model = LeNet5(bundle.input_channels, len(bundle.class_names)).to(device)
     class_weights, class_counts = None, None
     if args.class_weighted:
         class_weights, class_counts = training_class_weights(
             bundle.train_loader.dataset, len(bundle.class_names), args.class_weight_power)
-    train_criterion = nn.CrossEntropyLoss(
-        weight=class_weights.to(device) if class_weights is not None else None)
+    train_criterion, criterion = build_loss_functions(
+        args.label_smoothing,
+        class_weights.to(device) if class_weights is not None else None)
     run_config = {
         **{key: str(value) if isinstance(value, Path) else value for key, value in vars(args).items()},
         "device": str(device), "class_names": bundle.class_names,
@@ -179,7 +205,8 @@ def main() -> None:
         "validation_loss": "unweighted cross entropy",
         "source_sha256": {
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ("train.py", "data.py", "model.py")
+            for name in (("train.py", "data.py", "model.py", "model_v2.py")
+                         if args.model_version == "v2" else ("train.py", "data.py", "model.py"))
         },
     }
     (output_dir / "run_config.json").write_text(json.dumps(run_config, indent=2) + "\n")
@@ -223,7 +250,7 @@ def main() -> None:
             torch.save(
                 {
                     "model_state": model.state_dict(),
-                    "model_name": "LeNet5ReLUMaxPool",
+                    "model_name": "LeNetV2Conv8x24FC64x32" if args.model_version == "v2" else "LeNet5ReLUMaxPool",
                     "input_channels": bundle.input_channels,
                     "image_size": [32, 32],
                     "class_names": bundle.class_names,

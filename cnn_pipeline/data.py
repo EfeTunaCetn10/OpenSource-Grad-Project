@@ -107,6 +107,7 @@ def build_insect_loaders(
     limit_train: int | None = None,
     limit_eval: int | None = None,
     train_resize: bool = False,
+    train_color_jitter: bool = True,
 ) -> DataBundle:
     for split in ("train", "val", "test"):
         if not (data_dir / split).is_dir():
@@ -118,7 +119,8 @@ def build_insect_loaders(
             transforms.Resize((32, 32)) if train_resize else
             transforms.RandomResizedCrop(32, scale=(0.80, 1.0)),
             transforms.RandomHorizontalFlip(),
-            transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.10),
+            *([transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.10)]
+              if train_color_jitter else []),
             transforms.ToTensor(),
             transforms.Normalize(mean, std),
         ]

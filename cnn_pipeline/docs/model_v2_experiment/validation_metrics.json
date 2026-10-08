@@ -1,0 +1,221 @@
+{
+  "loss": 1.4177196770402463,
+  "accuracy": 0.5434047350620068,
+  "macro_recall": 0.36946313191043056,
+  "confusion_matrix": [
+    [
+      91,
+      1,
+      0,
+      1,
+      22,
+      2,
+      40,
+      13,
+      17,
+      1
+    ],
+    [
+      16,
+      1,
+      1,
+      0,
+      16,
+      0,
+      34,
+      7,
+      10,
+      0
+    ],
+    [
+      2,
+      7,
+      64,
+      9,
+      13,
+      0,
+      1,
+      14,
+      10,
+      0
+    ],
+    [
+      0,
+      9,
+      21,
+      4,
+      0,
+      0,
+      1,
+      10,
+      4,
+      0
+    ],
+    [
+      14,
+      0,
+      0,
+      0,
+      197,
+      1,
+      59,
+      3,
+      3,
+      0
+    ],
+    [
+      5,
+      0,
+      0,
+      0,
+      47,
+      3,
+      5,
+      0,
+      1,
+      0
+    ],
+    [
+      10,
+      0,
+      0,
+      0,
+      44,
+      0,
+      144,
+      22,
+      8,
+      1
+    ],
+    [
+      7,
+      5,
+      0,
+      0,
+      5,
+      0,
+      10,
+      400,
+      22,
+      2
+    ],
+    [
+      16,
+      6,
+      1,
+      8,
+      22,
+      1,
+      18,
+      117,
+      54,
+      3
+    ],
+    [
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      2,
+      59,
+      0,
+      6
+    ]
+  ],
+  "split": "val",
+  "samples": 1774,
+  "class_names": [
+    "bee",
+    "beetle",
+    "beetle_cocci",
+    "bug",
+    "fly",
+    "fly_sarco",
+    "fly_small",
+    "hfly_episyr",
+    "hfly_eupeo",
+    "hfly_sphaero"
+  ],
+  "per_class": [
+    {
+      "label": "bee",
+      "support": 188,
+      "correct": 91,
+      "recall": 0.48404255319148937
+    },
+    {
+      "label": "beetle",
+      "support": 85,
+      "correct": 1,
+      "recall": 0.011764705882352941
+    },
+    {
+      "label": "beetle_cocci",
+      "support": 120,
+      "correct": 64,
+      "recall": 0.5333333333333333
+    },
+    {
+      "label": "bug",
+      "support": 49,
+      "correct": 4,
+      "recall": 0.08163265306122448
+    },
+    {
+      "label": "fly",
+      "support": 277,
+      "correct": 197,
+      "recall": 0.7111913357400722
+    },
+    {
+      "label": "fly_sarco",
+      "support": 61,
+      "correct": 3,
+      "recall": 0.04918032786885246
+    },
+    {
+      "label": "fly_small",
+      "support": 229,
+      "correct": 144,
+      "recall": 0.62882096069869
+    },
+    {
+      "label": "hfly_episyr",
+      "support": 451,
+      "correct": 400,
+      "recall": 0.8869179600886918
+    },
+    {
+      "label": "hfly_eupeo",
+      "support": 246,
+      "correct": 54,
+      "recall": 0.21951219512195122
+    },
+    {
+      "label": "hfly_sphaero",
+      "support": 68,
+      "correct": 6,
+      "recall": 0.08823529411764706
+    }
+  ],
+  "best_epoch": 58,
+  "epoch_metrics": {
+    "epoch": 58,
+    "train_loss": 0.9765816843026106,
+    "train_accuracy": 0.6562971084007126,
+    "val_loss": 1.4177196770402463,
+    "val_accuracy": 0.5434047350620068,
+    "learning_rate": 1.2711661792704668e-05
+  },
+  "train_validation_gap_pp": 11.289237333870583,
+  "checkpoint_sha256": "6df3aa5435d234627caa4d8d392664de82d7712da66f9f0ce2071c7eae826d12",
+  "parameters": {
+    "total": 46306,
+    "conv": 5432,
+    "fc": 40874,
+    "conv_share": 0.11730661253401287,
+    "fc_share": 0.8826933874659871
+  }
+}
