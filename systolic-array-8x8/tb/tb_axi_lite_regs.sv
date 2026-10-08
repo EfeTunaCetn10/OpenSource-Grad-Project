@@ -30,6 +30,13 @@ module tb_axi_lite_regs;
     logic [5:0] cfg_shift_n [0:7];
     logic cfg_relu [0:7];
     logic cfg_bypass;
+    logic [8:0] cfg_c_in;
+    logic [2:0] cfg_kh, cfg_kw;
+    logic [1:0] cfg_stride, cfg_pad;
+    logic [5:0] cfg_out_h, cfg_out_w;
+    logic [7:0] cfg_tile_idx, cfg_tile_count;
+    logic cfg_param_src;
+    logic [15:0] cfg_k_len;
 
     integer errors = 0;
     integer start_seen = 0;
@@ -55,7 +62,11 @@ module tb_axi_lite_regs;
         .start(start), .soft_reset(soft_reset), .counter_clear(counter_clear),
         .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
         .cfg_shift_n(cfg_shift_n), .cfg_relu(cfg_relu),
-        .cfg_bypass(cfg_bypass)
+        .cfg_bypass(cfg_bypass), .cfg_c_in(cfg_c_in), .cfg_kh(cfg_kh),
+        .cfg_kw(cfg_kw), .cfg_stride(cfg_stride), .cfg_pad(cfg_pad),
+        .cfg_out_h(cfg_out_h), .cfg_out_w(cfg_out_w),
+        .cfg_tile_idx(cfg_tile_idx), .cfg_tile_count(cfg_tile_count),
+        .cfg_param_src(cfg_param_src), .cfg_k_len(cfg_k_len)
     );
 
     always @(posedge clk) begin
@@ -207,6 +218,18 @@ module tb_axi_lite_regs;
         axi_read(12'h008, 1, value);
         check(value[0] && !value[1] && !value[2] && !value[3],
               "reset STATUS mismatch");
+        axi_write(12'h010, 32'hB8E0_DA03, 4'hF, 1'b1, 0, 0);
+        axi_read(12'h010, 0, value);
+        check(value == 32'h38E0_DA03, "LAYER_CFG reserved bit was not masked");
+        check(cfg_c_in == 3 && cfg_kh == 5 && cfg_kw == 5 &&
+              cfg_stride == 1 && cfg_pad == 0 &&
+              cfg_out_h == 28 && cfg_out_w == 28,
+              "LAYER_CFG decoded fields mismatch");
+        check(cfg_k_len == 0, "k_len changed before commit");
+        axi_write(12'h014, 32'h0002_0103, 4'hF, 1'b1, 0, 0);
+        check(cfg_tile_idx == 3 && cfg_tile_count == 1 && cfg_param_src,
+              "TILE_CFG decoded fields mismatch");
+        axi_write(12'h014, 32'h0, 4'hF, 1'b1, 0, 0);
 
         // START is rejected before the first commit and is self-clearing.
         axi_write(12'h004, 32'h1, 4'h1, 1'b1, 3, 2);
@@ -266,6 +289,7 @@ module tb_axi_lite_regs;
         axi_write(12'h0C0, 32'h1, 4'h1, 1'b0, 2, 1);
         axi_read(12'h0C4, 1, value);
         check(value[24] && value[23:0] == 24'h0, "valid commit status mismatch");
+        check(cfg_k_len == 75, "registered k_len mismatch after commit");
         for (i = 0; i < 8; i = i + 1) begin
             axi_read(12'h040 + i*16, 0, value);
             if (i == 0)
@@ -342,7 +366,7 @@ module tb_axi_lite_regs;
         rst_n = 1'b1;
         axi_write(12'h010, 32'hA5A5_5A5A, 4'hF, 1'b1, 0, 0);
         axi_read(12'h010, 1, value);
-        check(value == 32'hA5A5_5A5A, "post-reset transaction failed");
+        check(value == 32'h25A5_5A5A, "LAYER_CFG[31] RAZ/WI failed");
 
         // The counters are direct datapath inputs and counter_clear is the
         // SOFT_RESET contract to their owner.
