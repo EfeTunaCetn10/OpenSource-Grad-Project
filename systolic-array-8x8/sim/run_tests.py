@@ -114,6 +114,7 @@ def ascii_guard() -> None:
 VECTOR_GENERATORS = [
     ("gen_requant_vectors.py", "req_y.mem"),
     ("gen_conv1_vectors.py", "c1_y.mem"),
+    ("gen_act_buffer_vectors.py", "actbuf_frame0.mem"),
 ]
 
 
