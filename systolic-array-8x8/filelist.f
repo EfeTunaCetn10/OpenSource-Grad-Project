@@ -12,6 +12,7 @@ rtl/requant_array.sv
 rtl/weight_feeder.sv
 rtl/layer_ctrl.sv
 rtl/conv1_top.sv
+rtl/act_buffer.sv
 
 # Not in any synthesis top yet: the AXI4-Lite register file still has no
 # wrapper that connects it to the datapath.
