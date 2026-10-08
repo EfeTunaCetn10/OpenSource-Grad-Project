@@ -78,11 +78,10 @@ The most recent recorded regression is **555 passed**, after test-vector export
 (focused export/forward tests: **27 passed**). These are prior execution results;
 this documentation update did not rerun tests or validation.
 
-**Next dependency:** Person B must provide RTL and its usable interface definition.
-Then interface adapters and cocotb tests can consume the canonical vectors, compare
-primitive and intermediate results, and investigate mismatches. RTL equivalence,
-hardware packing/export, AXI/DMA integration, FPGA execution and hardware
-performance measurements remain future work; none is established by Python tests.
+**Next integration milestone:** cross-validate the frozen ML candidate against the
+RTL-side Conv1 reference, implement the hardware layout adapter, export real
+candidate parameters into the RTL representation, and run a bit-exact real-model
+Conv1 regression.
 
 ## Guides and repository
 
