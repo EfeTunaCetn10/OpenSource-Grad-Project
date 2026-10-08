@@ -12,6 +12,13 @@
 // green (measured 2026-10-07 before the port existed).  Bank r supplies weight_data lane r, and every bank is
 // read at the same registered address (tile_idx*k_len + k).
 //
+// INIT_PREFIX (default "") is option (b) of the ADR-011-preload-karar-memosu
+// decision memo: a parametric $readmemh initial value per bank, the pure-RTL
+// alternative to eight .coe files through the Block Memory Generator. It
+// coexists with wr_*, not replaces it -- init supplies the bitstream value,
+// wr_* can still overwrite it at runtime (ADR-012). Leaving it "" (every
+// instantiation as of this writing) reaches none of that code.
+//
 // The synchronous BRAM output register feeds a two-entry elastic FIFO.  The
 // output register is held whenever the FIFO cannot accept it, so a late
 // weight_ready deassertion cannot overwrite an unaccepted word.  When ready
@@ -19,15 +26,24 @@
 // read occur together; after initial fill this sustains one beat per clock
 // without losing, duplicating, or reordering a word.
 module weight_feeder #(
-    parameter int ROWS       = 8,
-    parameter int DATA_WIDTH = 8,
-    parameter int K_MAX      = 1024,
-    parameter int DEPTH      = 8192,
-    parameter int TILE_MAX   = 16,
-    parameter int K_W        = $clog2(K_MAX+1),
-    parameter int ADDR_W     = $clog2(DEPTH),
-    parameter int TILE_W     = $clog2(TILE_MAX),
-    parameter int BANK_W     = $clog2(ROWS)
+    parameter int    ROWS       = 8,
+    parameter int    DATA_WIDTH = 8,
+    parameter int    K_MAX      = 1024,
+    parameter int    DEPTH      = 8192,
+    parameter int    TILE_MAX   = 16,
+    // Bitstream-embedded initialization, option (b) of the ADR-011 preload
+    // decision memo.  Empty (the default, and what every existing
+    // instantiation -- tb_weight_feeder, conv1_top -- passes) disables this
+    // entirely: no $readmemh call is even reached, so the wr_* load port
+    // stays the only way weights get in and nothing here changes behavior.
+    // A non-empty value is a path prefix; bank r reads
+    // "<INIT_PREFIX><r>.mem" into bank_mem at time zero, matching
+    // gen_conv1_vectors.py's "c1_wbank<r>.mem" naming one-to-one.
+    parameter string INIT_PREFIX = "",
+    parameter int    K_W        = $clog2(K_MAX+1),
+    parameter int    ADDR_W     = $clog2(DEPTH),
+    parameter int    TILE_W     = $clog2(TILE_MAX),
+    parameter int    BANK_W     = $clog2(ROWS)
 ) (
     input  logic                        clk,
     input  logic                        rst_n,
@@ -255,6 +271,19 @@ module weight_feeder #(
             (* ram_style = "block" *)
             logic [DATA_WIDTH-1:0] bank_mem [0:DEPTH-1];
             logic [DATA_WIDTH-1:0] rd_q;
+
+            // Option (b) of the ADR-011 preload decision memo: a bitstream
+            // -embedded initial value straight from RTL, no .coe / Block
+            // Memory Generator IP involved.  Guarded on INIT_PREFIX so the
+            // common case (every current instantiation) elaborates this
+            // initial block to nothing -- not even the $sformatf argument is
+            // evaluated at runtime, since INIT_PREFIX is a parameter and the
+            // guard is resolved at elaboration/synthesis-compile time, same
+            // as any other parameter-constant `if`.
+            initial begin
+                if (INIT_PREFIX != "")
+                    $readmemh($sformatf("%s%0d.mem", INIT_PREFIX, gb), bank_mem);
+            end
 
             // rd_q is the block RAM's own output register and is deliberately
             // not reset: a reset here costs the inferred output register.  It
