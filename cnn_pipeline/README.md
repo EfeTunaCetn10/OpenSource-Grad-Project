@@ -7,7 +7,14 @@ parameter preparation, full integer forward, validation and canonical test vecto
 
 See the [authoritative current status](../README.md#current-validated-status) for
 validated metrics, completed work and the dependency on Person B’s RTL/interface.
-No RTL is available and cocotb/RTL equivalence has not been established.
+
+The candidate INT8 Python pipeline is complete through full validation and
+canonical test-vector export. A substantial RTL implementation is now available
+on the integrated hardware path: Conv1, requantization, systolic compute,
+weight/window feeding, AXI-Lite control and related XSim/Vivado infrastructure
+exist. Full-network RTL execution, DMA/board integration and frozen-candidate
+end-to-end RTL equivalence are not yet complete.
+
 The training instructions below are retained for reproducibility; continuing the
 current candidate pipeline does not require retraining or recalibration.
 
