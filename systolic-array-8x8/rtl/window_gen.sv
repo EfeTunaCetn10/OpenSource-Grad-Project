@@ -16,18 +16,41 @@
 // outside the input frame.  The Stage-1 contract is PAD=0; a production
 // non-zero-padding design would additionally need an explicit border policy
 // in the DMA/frame contract and verification vectors.
+//
+// C_LOGICAL vs C_PHYS_STRIDE -- ADR-018 Decision 2, "Bedeli" item 1.  The
+// reduction length K_LEN is computed from C_LOGICAL ONLY.  Computing it from
+// the physical stride would give conv2 K = 200 instead of 150: the output
+// shape would stay correct, the values would go quietly wrong and no flag
+// would be raised.  That is the failure class this split exists to make
+// impossible.  The physical stride is used only by line_buffer's addressing.
+//
+// Frame lifecycle.  ST_DONE used to be terminal, so a second frame needed the
+// global reset; conv2's two output-channel tiles cannot work that way.  The
+// `restart` input returns the generator to ST_INPUT so a FRESH input stream
+// can be accepted.  It is explicitly NOT a replay: line_buffer holds a ring of
+// K_H rows, not the whole frame, so there is nothing in it to replay from.  A
+// second pass over the same data means re-streaming it from the intermediate
+// activation buffer.
 module window_gen #(
-    parameter int K_H        = 5,
-    parameter int K_W        = 5,
-    parameter int C_IN       = 3,
-    parameter int IN_W       = 32,
-    parameter int IN_H       = 32,
-    parameter int STRIDE     = 1,
-    parameter int PAD        = 0,
-    parameter int DATA_WIDTH = 8
+    parameter int K_H           = 5,
+    parameter int K_W           = 5,
+    parameter int C_LOGICAL     = 3,
+    parameter int C_PHYS_STRIDE = C_LOGICAL,
+    parameter int IN_W          = 32,
+    parameter int IN_H          = 32,
+    parameter int STRIDE        = 1,
+    parameter int PAD           = 0,
+    parameter int DATA_WIDTH    = 8
 ) (
     input  logic        clk,
     input  logic        rst_n,
+
+    // Single-cycle frame restart.  Accepted only in ST_DONE, or while the
+    // generator is still idle after reset; a restart that arrives mid-frame is
+    // refused and raises restart_error.  Defaulted so an instantiation that
+    // predates this port is driven with a known value instead of 'z.
+    input  logic        restart = 1'b0,
+    output logic        restart_error,
 
     input  logic        s_valid,
     output logic        s_ready,
@@ -47,24 +70,25 @@ module window_gen #(
 );
     localparam int OUT_W = ((IN_W + 2*PAD - K_W) / STRIDE) + 1;
     localparam int OUT_H = ((IN_H + 2*PAD - K_H) / STRIDE) + 1;
-    localparam int K_LEN = C_IN * K_H * K_W;
+    // Logical, never physical.  See the C_LOGICAL note in the header.
+    localparam int K_LEN = C_LOGICAL * K_H * K_W;
 
     localparam int ROW_W       = (IN_H < 1) ? 1 : $clog2(IN_H+1);
     localparam int COL_W       = (IN_W < 1) ? 1 : $clog2(IN_W+1);
     localparam int OUT_Y_W     = (OUT_H <= 1) ? 1 : $clog2(OUT_H);
     localparam int TILE_X_W    = (OUT_W <= 1) ? 1 : $clog2(OUT_W);
     localparam int K_COUNT_W   = (K_LEN <= 1) ? 1 : $clog2(K_LEN);
-    localparam int CI_W        = (C_IN <= 1) ? 1 : $clog2(C_IN);
+    localparam int CI_W        = (C_LOGICAL <= 1) ? 1 : $clog2(C_LOGICAL);
     localparam int KH_W        = (K_H <= 1) ? 1 : $clog2(K_H);
     localparam int KW_W        = (K_W <= 1) ? 1 : $clog2(K_W);
-    localparam int CH_W        = (C_IN < 1) ? 1 : $clog2(C_IN+1);
+    localparam int CH_W        = (C_LOGICAL < 1) ? 1 : $clog2(C_LOGICAL+1);
     localparam int ROW_COORD_W = $clog2(IN_H + 2*PAD + K_H + STRIDE + 2) + 1;
     localparam int COL_COORD_W = $clog2(IN_W + 2*PAD + K_W + 8*STRIDE + 2) + 1;
 
     localparam logic [OUT_Y_W-1:0]   LAST_OUT_Y  = OUT_H - 1;
     localparam logic [TILE_X_W-1:0]  OUT_W_VALUE = OUT_W;
     localparam logic [K_COUNT_W-1:0] LAST_K       = K_LEN - 1;
-    localparam logic [CI_W-1:0]      LAST_CI      = C_IN - 1;
+    localparam logic [CI_W-1:0]      LAST_CI      = C_LOGICAL - 1;
     localparam logic [KH_W-1:0]      LAST_KH      = K_H - 1;
     localparam logic [KW_W-1:0]      LAST_KW      = K_W - 1;
     localparam logic signed [ROW_COORD_W-1:0] NEG_ONE = -1;
@@ -73,11 +97,39 @@ module window_gen #(
     localparam logic signed [COL_COORD_W-1:0] COL_STRIDE = STRIDE;
     localparam logic signed [COL_COORD_W-1:0] TILE_SOURCE_STEP = 8*STRIDE;
 
+    // Same guard as line_buffer, repeated here so a wrong parameterisation
+    // fails at the boundary it was written at and not one level down.  The
+    // generate half is the synthesis-time check: an illegal parameterisation
+    // instantiates a module that does not exist, which Vivado synthesis and
+    // XSim elaboration both report as a hard error.  A legal one elaborates
+    // nothing at all, so this costs no logic.
+    generate
+        if (C_PHYS_STRIDE < C_LOGICAL) begin : g_bad_stride
+            illegal_parameters_C_PHYS_STRIDE_below_C_LOGICAL u_guard ();
+        end
+    endgenerate
+`ifndef SYNTHESIS
+    initial begin
+        if (C_PHYS_STRIDE < C_LOGICAL)
+            $fatal(1, "window_gen: C_PHYS_STRIDE=%0d is below C_LOGICAL=%0d",
+                   C_PHYS_STRIDE, C_LOGICAL);
+    end
+`endif
+
     typedef enum logic [2:0] {ST_INPUT, ST_READ, ST_OUTPUT, ST_DONE} state_t;
     state_t state;
 
+    // Set as soon as this frame has consumed anything or left ST_INPUT, so a
+    // restart in the gap between two output rows -- which is also ST_INPUT --
+    // is correctly recognised as mid-frame and refused.
+    logic frame_started;
+    logic restart_idle;
+    logic restart_ok;
+    logic restart_bad;
+
     logic allow_input;
     logic resume_write;
+    logic lb_clear;
     logic lb_write_busy;
     logic [ROW_W-1:0] rows_written;
     logic lb_frame_done;
@@ -89,14 +141,16 @@ module window_gen #(
     logic [DATA_WIDTH-1:0] lb_rd_byte;
 
     line_buffer #(
-        .K_H        (K_H),
-        .C_IN       (C_IN),
-        .IN_W       (IN_W),
-        .IN_H       (IN_H),
-        .DATA_WIDTH (DATA_WIDTH)
+        .K_H           (K_H),
+        .C_LOGICAL     (C_LOGICAL),
+        .C_PHYS_STRIDE (C_PHYS_STRIDE),
+        .IN_W          (IN_W),
+        .IN_H          (IN_H),
+        .DATA_WIDTH    (DATA_WIDTH)
     ) u_line_buffer (
         .clk          (clk),
         .rst_n        (rst_n),
+        .clear        (lb_clear),
         .allow_input  (allow_input),
         .resume_write (resume_write),
         .s_valid      (s_valid),
@@ -141,6 +195,18 @@ module window_gen #(
     logic rows_ready;
 
     always_comb begin
+        // A restart is a request, not a command.  Honouring it mid-frame would
+        // leave a half-reset pipeline -- counters at zero, stale bytes still
+        // in the ring, a partially consumed AXIS beat -- which is a worse
+        // state than refusing it, so it is refused and recorded instead.
+        restart_idle = (state == ST_INPUT) && !frame_started;
+        restart_ok   = restart && ((state == ST_DONE) || restart_idle);
+        restart_bad  = restart && !restart_ok;
+        // Clearing the line buffer and rewinding this state machine have to be
+        // the same event, otherwise the two sides disagree about which frame
+        // they are on.
+        lb_clear     = restart_ok;
+
         remaining_cols = OUT_W_VALUE - tile_x;
         if (remaining_cols > 8)
             active_count = 4'd8;
@@ -194,8 +260,44 @@ module window_gen #(
         end
     end
 
+    // Frame bookkeeping for the restart gate.  Separate from the datapath
+    // always_ff below because restart_error must survive the restart itself:
+    // it is cleared only by rst_n.
     always_ff @(posedge clk) begin
         if (!rst_n) begin
+            restart_error <= 1'b0;
+            frame_started <= 1'b0;
+        end else begin
+            if (restart_bad)
+                restart_error <= 1'b1;
+
+            if (restart_ok)
+                frame_started <= 1'b0;
+            else if ((s_valid && s_ready) || (state != ST_INPUT))
+                frame_started <= 1'b1;
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            state                   <= ST_INPUT;
+            out_y                   <= '0;
+            tile_x                  <= '0;
+            k_count                 <= '0;
+            ci_count                <= '0;
+            kh_count                <= '0;
+            kw_count                <= '0;
+            gather_issue_lane       <= '0;
+            gather_capture_lane     <= '0;
+            gather_capture_pending  <= 1'b0;
+            gather_capture_from_lb  <= 1'b0;
+            gather_reg              <= '0;
+            out_base_row            <= -PAD;
+            tile_base_col           <= -PAD;
+        end else if (restart_ok) begin
+            // Exactly the reset values.  Anything left behind here would be
+            // state from the previous frame leaking into the next one, and the
+            // leak would be silent: the output shape would still be right.
             state                   <= ST_INPUT;
             out_y                   <= '0;
             tile_x                  <= '0;
@@ -317,6 +419,8 @@ module window_gen #(
                 end
 
                 ST_DONE: begin
+                    // Terminal except for an accepted restart, which the
+                    // priority branch above handles before this case runs.
                     state <= ST_DONE;
                 end
 
@@ -338,6 +442,40 @@ module window_gen #(
         |-> lb_rd_valid;
     endproperty
     a_read_response_matches_request: assert property (p_read_response_matches_request);
+
+    // An accepted restart must land the generator exactly where reset would.
+    property p_restart_rewinds_everything;
+        @(posedge clk) disable iff (!rst_n)
+        restart_ok |=> ((state == ST_INPUT) && (out_y == '0) && (tile_x == '0) &&
+                        (k_count == '0) && (ci_count == '0) && (kh_count == '0) &&
+                        (kw_count == '0) && (gather_reg == 64'b0) &&
+                        !gather_capture_pending && !gather_capture_from_lb &&
+                        (gather_issue_lane == '0) && !frame_started);
+    endproperty
+    a_restart_rewinds_everything: assert property (p_restart_rewinds_everything);
+
+    // A refused restart has to be inert: the line buffer must not be cleared,
+    // so the rows already ingested are still there on the next cycle.
+    property p_refused_restart_is_inert;
+        @(posedge clk) disable iff (!rst_n)
+        restart_bad |-> !lb_clear;
+    endproperty
+    a_refused_restart_is_inert: assert property (p_refused_restart_is_inert);
+
+    property p_refused_restart_keeps_rows;
+        @(posedge clk) disable iff (!rst_n)
+        restart_bad |=> (rows_written >= $past(rows_written));
+    endproperty
+    a_refused_restart_keeps_rows: assert property (p_refused_restart_keeps_rows);
+
+    // restart_error is sticky by contract: a refused restart is a bug in the
+    // layer sequencer, and a pulse only its own cycle can see is a pulse
+    // nobody sees.  Cleared by rst_n only.
+    property p_restart_error_sticky;
+        @(posedge clk) disable iff (!rst_n)
+        restart_error |=> restart_error;
+    endproperty
+    a_restart_error_sticky: assert property (p_restart_error_sticky);
 
     logic unused_lb_frame_done;
     always_comb unused_lb_frame_done = lb_frame_done;
