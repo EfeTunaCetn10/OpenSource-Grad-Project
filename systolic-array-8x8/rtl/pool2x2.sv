@@ -60,8 +60,13 @@ module pool2x2 #(
     state_t state;
 
     // The two rows belonging to the current output row remain resident until
-    // every output beat has handshaken. K_H=3 avoids a power-of-two width
-    // truncation in line_buffer's existing K_H_VALUE constant.
+    // every output beat has handshaken. K_H=3 (not 2) is now a deliberate
+    // choice, no longer a workaround: it was originally picked to dodge a
+    // power-of-two truncation in line_buffer's K_H_VALUE, and that bug was
+    // fixed on 2026-10-09 ($clog2(K_H) -> $clog2(K_H+1)), so K_H=2 is
+    // viable. It is left at 3 because the saving is one buffered row
+    // (~224 bytes against 16 RAMB36) and dropping it would cost a full
+    // re-verification cycle for no measurable gain.
     line_buffer #(
         .K_H(3), .C_LOGICAL(TILE), .C_PHYS_STRIDE(TILE),
         .IN_W(IN_W), .IN_H(TOTAL_H), .DATA_WIDTH(8)
