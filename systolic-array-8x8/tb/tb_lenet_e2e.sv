@@ -189,77 +189,156 @@ module lenet_e2e_stage #(
     endtask
 endmodule
 
+// The sequencer supplies each captured convolution tile as one pixel per
+// beat.  Pool2's two tiles are serialized in frame_mem and by the pool DUT.
+module lenet_e2e_pool #(
+    parameter string NAME = "pool1",
+    parameter int IN_H = 28, IN_W = 28, CO = 6
+) (
+    input logic clk, rst_n,
+    output logic finished
+);
+    localparam int NT = (CO+7)/8;
+    localparam int IN_BEATS = NT*IN_H*IN_W;
+    localparam int OUT_BEATS = NT*(IN_H/2)*(IN_W/2);
+    localparam int OUT_LEN = OUT_BEATS*8;
+    localparam int TIMEOUT = 200000;
+
+    logic [63:0] frame_mem [0:IN_BEATS-1];
+    logic [7:0] golden [0:OUT_LEN-1];
+    logic [7:0] actual [0:OUT_LEN-1];
+    logic s_valid, s_ready, s_last, m_valid, m_ready, m_last;
+    logic [63:0] s_data, m_data;
+    logic [15:0] lfsr;
+    logic was_stalled, stalled_last;
+    logic [63:0] stalled_data;
+    bit checking;
+    int received, errors;
+    string path;
+
+    pool2x2 #(.IN_H(IN_H), .IN_W(IN_W), .C_LOGICAL(CO)) dut (
+        .clk(clk), .rst_n(rst_n), .s_valid(s_valid), .s_ready(s_ready),
+        .s_data(s_data), .s_last(s_last), .m_valid(m_valid),
+        .m_ready(m_ready), .m_data(m_data), .m_last(m_last)
+    );
+
+    function automatic logic [15:0] next_lfsr(logic [15:0] v);
+        return {v[14:0],v[15]^v[13]^v[12]^v[10]};
+    endfunction
+
+    initial begin
+        s_valid=0; s_last=0; s_data=0; checking=0; finished=0;
+    end
+
+    always @(posedge clk) begin
+        if (!rst_n) begin
+            lfsr <= (CO == 6) ? 16'hACE1 : 16'hC00D;
+            m_ready <= 0;
+            was_stalled <= 0;
+            stalled_data <= 0;
+            stalled_last <= 0;
+        end else begin
+            lfsr <= next_lfsr(lfsr);
+            m_ready <= checking && (lfsr[0] | lfsr[3]);
+            if (checking) begin
+                if (was_stalled && (!m_valid || m_data !== stalled_data ||
+                                    m_last !== stalled_last))
+                    $fatal(1,"FAIL %s output changed under stall",NAME);
+                was_stalled <= m_valid && !m_ready;
+                if (m_valid && !m_ready) begin
+                    stalled_data <= m_data;
+                    stalled_last <= m_last;
+                end
+                if (m_valid && m_ready) begin
+                    if (received >= OUT_BEATS)
+                        $fatal(1,"FAIL %s extra output beat=%0d data=%h",NAME,received,m_data);
+                    if (m_last !== (received == OUT_BEATS-1))
+                        $fatal(1,"FAIL %s beat=%0d last=%b expected_last=%b",
+                               NAME,received,m_last,received == OUT_BEATS-1);
+                    for (int lane=0;lane<8;lane++) begin
+                        int idx;
+                        idx=received*8+lane;
+                        actual[idx]=m_data[lane*8+:8];
+                        if (actual[idx] !== golden[idx]) begin
+                            $display("FAIL %s RTL boundary index=%0d got=%02h expected=%02h",
+                                     NAME,idx,actual[idx],golden[idx]);
+                            errors++;
+                        end
+                    end
+                    received++;
+                end
+            end
+        end
+    end
+
+    task automatic feed;
+        for (int b=0;b<IN_BEATS;b++) begin
+            @(negedge clk);
+            s_valid=1; s_data=frame_mem[b]; s_last=(b==IN_BEATS-1);
+            @(posedge clk);
+            while (!s_ready) @(posedge clk);
+        end
+        @(negedge clk);
+        s_valid=0; s_last=0; s_data=0;
+    endtask
+
+    task automatic run;
+        int guard;
+        finished=0; received=0; errors=0;
+        path=$sformatf("../vectors/lenet_%s_y.mem",NAME);
+        $readmemh(path,golden);
+        @(negedge clk);
+        checking=1;
+        feed();
+        guard=0;
+        while (received<OUT_BEATS && guard<TIMEOUT) begin
+            @(negedge clk); guard++;
+        end
+        if (guard>=TIMEOUT)
+            $fatal(1,"FAIL %s timeout received=%0d/%0d",NAME,received,OUT_BEATS);
+        repeat (3) @(negedge clk);
+        if (m_valid) $fatal(1,"FAIL %s extra valid after completion",NAME);
+        checking=0;
+        if (errors) $fatal(1,"FAIL %s RTL boundary: %0d mismatches",NAME,errors);
+        $display("PASS %s RTL boundary: %0d padded bytes across %0d tile(s)",
+                 NAME,OUT_LEN,NT);
+        finished=1;
+    endtask
+endmodule
+
 module tb_lenet_e2e;
     logic clk=0,rst_n=0;
     always #5 clk=~clk;
-    logic d1,d2,d3,d4,d5;
+    logic d1,d2,d3,d4,d5,dp1,dp2;
     lenet_e2e_stage #(.NAME("conv1"),.IN_H(32),.IN_W(32),.CI(3),.PHYS(3),.KH(5),.KW(5),.CO(6)) c1(clk,rst_n,d1);
     lenet_e2e_stage #(.NAME("conv2"),.IN_H(14),.IN_W(14),.CI(6),.PHYS(8),.KH(5),.KW(5),.CO(16)) c2(clk,rst_n,d2);
     lenet_e2e_stage #(.NAME("fc1"),.IN_H(1),.IN_W(1),.CI(400),.PHYS(400),.KH(1),.KW(1),.CO(120)) f1(clk,rst_n,d3);
     lenet_e2e_stage #(.NAME("fc2"),.IN_H(1),.IN_W(1),.CI(120),.PHYS(120),.KH(1),.KW(1),.CO(84)) f2(clk,rst_n,d4);
     lenet_e2e_stage #(.NAME("fc3"),.IN_H(1),.IN_W(1),.CI(84),.PHYS(84),.KH(1),.KW(1),.CO(10)) f3(clk,rst_n,d5);
+    lenet_e2e_pool #(.NAME("pool1"),.IN_H(28),.IN_W(28),.CO(6)) p1(clk,rst_n,dp1);
+    lenet_e2e_pool #(.NAME("pool2"),.IN_H(10),.IN_W(10),.CO(16)) p2(clk,rst_n,dp2);
 
-    logic [7:0] pool1_gold[0:1567],pool2_gold[0:399],pred_gold[0:0];
-    logic [7:0] pool1_actual[0:1567],pool2_actual[0:399];
-    int errors;
-
-    // STAND-IN, replaced at integration: exact 2x2 max over the captured
-    // padded tile-major bytes.  The pool RTL is not present in this lane.
-    task automatic pool1_standin;
-        for(int y=0;y<14;y++) for(int x=0;x<14;x++) for(int lane=0;lane<8;lane++) begin
-            logic signed [7:0] best,v;
-            best=-128;
-            for(int dy=0;dy<2;dy++) for(int dx=0;dx<2;dx++) begin
-                v=c1.actual[((2*y+dy)*28+2*x+dx)*8+lane];
-                if(v>best) best=v;
-            end
-            pool1_actual[(y*14+x)*8+lane]=best;
-            if(best !== pool1_gold[(y*14+x)*8+lane]) begin
-                $display("FAIL pool1 stand-in boundary y=%0d x=%0d lane=%0d got=%02h expected=%02h",
-                         y,x,lane,best,pool1_gold[(y*14+x)*8+lane]); errors++;
-            end
-        end
-        if(errors) $fatal(1,"FAIL pool1 stand-in boundary: %0d mismatches",errors);
-        $display("PASS pool1 stand-in boundary: 1568 padded bytes");
-    endtask
-
-    task automatic pool2_standin;
-        for(int tile=0;tile<2;tile++) for(int y=0;y<5;y++) for(int x=0;x<5;x++) for(int lane=0;lane<8;lane++) begin
-            logic signed [7:0] best,v;
-            int idx;
-            best=-128;
-            for(int dy=0;dy<2;dy++) for(int dx=0;dx<2;dx++) begin
-                v=c2.actual[(((tile*10+2*y+dy)*10+2*x+dx)*8+lane)];
-                if(v>best) best=v;
-            end
-            idx=(((tile*5+y)*5+x)*8+lane);
-            pool2_actual[idx]=best;
-            if(best !== pool2_gold[idx]) begin
-                $display("FAIL pool2 stand-in boundary index=%0d got=%02h expected=%02h",idx,best,pool2_gold[idx]); errors++;
-            end
-        end
-        if(errors) $fatal(1,"FAIL pool2 stand-in boundary: %0d mismatches",errors);
-        $display("PASS pool2 stand-in boundary: 400 bytes");
-    endtask
+    logic [7:0] pred_gold[0:0];
 
     initial begin
-        errors=0;
         $readmemh("../vectors/lenet_image_frame.mem",c1.frame_mem);
-        $readmemh("../vectors/lenet_pool1_y.mem",pool1_gold);
-        $readmemh("../vectors/lenet_pool2_y.mem",pool2_gold);
         $readmemh("../vectors/lenet_pred.mem",pred_gold);
         repeat(5) @(negedge clk); rst_n=1;
         c1.run();
-        pool1_standin();
+        for(int i=0;i<784;i++) for(int j=0;j<8;j++)
+            p1.frame_mem[i][j*8+:8]=c1.actual[i*8+j];
+        p1.run();
         for(int i=0;i<196;i++) begin
             c2.frame_mem[i]=0;
-            for(int j=0;j<8;j++) c2.frame_mem[i][j*8+:8]=pool1_actual[i*8+j];
+            for(int j=0;j<8;j++) c2.frame_mem[i][j*8+:8]=p1.actual[i*8+j];
         end
         c2.run();
-        pool2_standin();
+        for(int i=0;i<200;i++) for(int j=0;j<8;j++)
+            p2.frame_mem[i][j*8+:8]=c2.actual[i*8+j];
+        p2.run();
         for(int i=0;i<50;i++) begin
             f1.frame_mem[i]=0;
-            for(int j=0;j<8;j++) f1.frame_mem[i][j*8+:8]=pool2_actual[i*8+j];
+            for(int j=0;j<8;j++) f1.frame_mem[i][j*8+:8]=p2.actual[i*8+j];
         end
         f1.run();
         for(int i=0;i<15;i++) begin
