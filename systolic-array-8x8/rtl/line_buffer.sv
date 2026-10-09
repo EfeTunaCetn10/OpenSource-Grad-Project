@@ -68,7 +68,13 @@ module line_buffer #(
     localparam int ROW_BYTE_W    = (ROW_BYTES <= 1) ? 1 : $clog2(ROW_BYTES);
     localparam int BYTE_INDEX_W  = (ROW_BYTES <= 8) ? 3 : $clog2(ROW_BYTES);
     localparam int MEM_ADDR_W    = (MEM_DEPTH <= 1) ? 1 : $clog2(MEM_DEPTH);
-    localparam int RING_W        = (K_H <= 1) ? 1 : $clog2(K_H);
+    // $clog2(K_H) holds slot INDICES (0..K_H-1) but K_H_VALUE below must hold K_H
+    // ITSELF, which needs one more code point.  With $clog2(K_H) every power-of-two
+    // K_H truncated K_H_VALUE to zero and made `rd_row % K_H_VALUE` a modulo by zero
+    // ('x read addresses).  K_H=5 (conv1/conv2) never hit it; K_H=2 (2x2 pooling)
+    // does.  $clog2(K_H+1) is identical for K_H=3 and K_H=5, so this widens nothing
+    // that exists today.  Found by Lane P, 2026-10-09.
+    localparam int RING_W        = (K_H <= 1) ? 1 : $clog2(K_H+1);
 
     localparam logic [ROW_W-1:0]        LAST_ROW          = IN_H - 1;
     localparam logic [ROW_BYTE_W-1:0]   LAST_ROW_BYTE     = ROW_BYTES - 1;
