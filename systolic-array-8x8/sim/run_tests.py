@@ -115,6 +115,11 @@ VECTOR_GENERATORS = [
     ("gen_requant_vectors.py", "req_y.mem"),
     ("gen_conv1_vectors.py", "c1_y.mem"),
     ("gen_act_buffer_vectors.py", "actbuf_frame0.mem"),
+    ("gen_pool_vectors.py", "p1_y.mem"),
+    ("gen_fc_vectors.py", "fc1_y.mem"),
+    # Must stay LAST: lenet_ref imports pool_ref and fc_ref, so this entry
+    # composes the other lanes' references instead of standing alone.
+    ("gen_lenet_vectors.py", "lenet_pred.mem"),
 ]
 
 
