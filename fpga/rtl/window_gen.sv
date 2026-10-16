@@ -76,7 +76,9 @@ module window_gen #(
     localparam int ROW_W       = (IN_H < 1) ? 1 : $clog2(IN_H+1);
     localparam int COL_W       = (IN_W < 1) ? 1 : $clog2(IN_W+1);
     localparam int OUT_Y_W     = (OUT_H <= 1) ? 1 : $clog2(OUT_H);
-    localparam int TILE_X_W    = (OUT_W <= 1) ? 1 : $clog2(OUT_W);
+    // remaining_cols and OUT_W_VALUE must represent OUT_W itself, including
+    // power-of-two widths (v3 Conv1 has OUT_W=32).
+    localparam int TILE_X_W    = (OUT_W <= 1) ? 1 : $clog2(OUT_W+1);
     localparam int K_COUNT_W   = (K_LEN <= 1) ? 1 : $clog2(K_LEN);
     localparam int CI_W        = (C_LOGICAL <= 1) ? 1 : $clog2(C_LOGICAL);
     localparam int KH_W        = (K_H <= 1) ? 1 : $clog2(K_H);
@@ -226,8 +228,12 @@ module window_gen #(
         source_row = out_base_row + kh_coord;
         source_col = tile_base_col + kw_coord + (lane_coord * COL_STRIDE);
 
+        // Virtual bottom padding never arrives on the input stream. Wait
+        // only for the last real row; ST_READ already emits zero outside
+        // the image. Preserve the row-pause guard against ring overwrite.
         rows_ready = !lb_write_busy && (bottom_row >= NEG_ONE) &&
-                     (rows_written_coord > bottom_row);
+                     ((bottom_row < IN_H) ? (rows_written_coord > bottom_row)
+                                         : (rows_written_coord == IN_H));
         allow_input = (state == ST_INPUT);
         resume_write = 1'b0;
         if ((state == ST_INPUT) && rows_ready)
