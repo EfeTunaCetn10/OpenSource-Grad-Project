@@ -71,7 +71,7 @@ Bitirme projesinde bunların hafifletilmiş fakat gerçekçi bir sürümü uygul
 
 ### MVP — Minimum Viable Product
 
-- [x] **PYNQ-Z2** (`xc7z020clg400-1`), Vivado 2024.1 + PYNQ v3.1 — [[ADR-001 Board ve Araç Sürümü]].
+- [x] **PYNQ-Z2** (`xc7z020clg400-1`), Vivado 2025.1; PYNQ image eşleşmesi açık — [[ADR-001 Board ve Araç Sürümü]].
 - [x] Giriş görüntüsü **32×32 RGB** olacak (`c_in = 3`) — bkz. [[ADR-002 CNN Topolojisi ve Dataset]].
 - [x] Aşama 1 için LeNet-5 reference model kullanılacak — 5×5 valid convolution,
   2×2 pooling, 10 sınıf — [[ADR-002 CNN Topolojisi ve Dataset]].
@@ -874,7 +874,7 @@ Kaynak: [MLPerf Tiny Benchmark](https://arxiv.org/abs/2106.07597)
 #### 1. hafta
 
 - [x] FPGA kartı ve part numarası kesinleştirilecek — PYNQ-Z2, `xc7z020clg400-1`.
-- [x] Kullanılabilir Vivado/Vitis sürümü sabitlenecek — **Vivado 2024.1 + PYNQ v3.1** ([[ADR-001 Board ve Araç Sürümü]]).
+- [x] Kullanılabilir Vivado/Vitis sürümü sabitlenecek — **Vivado 2025.1** ([[ADR-001 Board ve Araç Sürümü]]); PYNQ image eşleşmesi Aşama 2'nin ilk işi.
 - [x] Dataset seçilecek — böcek türü sınıflandırması ([[ADR-002 CNN Topolojisi ve Dataset]]).
 - [x] CNN katmanları ve tensor boyutları çıkarıldı (Aşama 1 LeNet-5 reference model,
   5×5 valid convolution, girdi 32×32 RGB → `c_in=3`) — [[ADR-002 CNN Topolojisi ve Dataset]].
@@ -1158,7 +1158,7 @@ Performans, kaynak, doğrulama ve entegrasyon etkileri nelerdir?
 
 İlk ADR adayları:
 
-- [x] `ADR-001`: FPGA kartı ve Vivado sürümü -> [[ADR-001 Board ve Araç Sürümü]] -- PYNQ-Z2 (xc7z020clg400-1), Vivado 2024.1 + PYNQ v3.1, 2026-08-28
+- [x] `ADR-001`: FPGA kartı ve Vivado sürümü -> [[ADR-001 Board ve Araç Sürümü]] -- PYNQ-Z2 (xc7z020clg400-1), Vivado 2025.1, 2026-08-28 (sürüm 2026-09-27'de 2024.1'den revize edildi; PYNQ image eşleşmesi açık)
 - [x] `ADR-002`: CNN topolojisi ve dataset -> [[ADR-002 CNN Topolojisi ve Dataset]] -- LeNet-5, INT8, 10 sinif, 32x32 RGB, 2026-08-28
 - [x] `ADR-003`: INT8 quantization formatı -> [[ADR-003 INT8 Fixed-Point Formatı]] -- simetrik INT8, per-channel M0+shift, round-half-up, 2026-08-28
 - [x] `ADR-004`: Systolic array boyutu → [[ADR-004 Systolic Array Boyutu]] — 8×8 (64 PE) kabul edildi, 2026-08-28
@@ -1185,13 +1185,22 @@ Performans, kaynak, doğrulama ve entegrasyon etkileri nelerdir?
 - [~] `ADR-016`: Aktivasyon tensör düzeni ve byte yerleşimi →
   [[ADR-016 Aktivasyon Tensör Düzeni ve Byte Yerleşimi]] — HWC, little-endian lane haritası,
   kanal dolgusu, çıkış payload'ı. **Önerildi, Kişi B onayı bekliyor**, 2026-09-25
+- [~] `ADR-017`: Simülasyon ve emülasyon ortamı →
+  [[ADR-017 Simülasyon ve Emülasyon Ortamı]] — tek simülatör XSim, cocotb/Icarus elendi,
+  Aşama 1'in bitiş hâli **tam ağ**. **Önerildi, Kişi B onayı bekliyor**, 2026-09-26
+- [~] `ADR-018`: K-streaming ve ara aktivasyon düzeni →
+  [[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni]] — Karar 1 (K-streaming, harici
+  partial-sum tamponu yok) implemente edildi; Karar 2'nin fiziksel layout'u **padded
+  tile-major** olarak 2026-10-07'de kilitlendi (adres
+  `(((c>>3)*H+h)*W+w)*8+(c&7)`, ping-pong 2×8 KB). Kalan açık madde FC'de kolon ekseninin
+  Aşama 2'ye parkı
 
 ---
 
 ## Hızlı başlangıç kontrol listesi
 
 - [x] Kart ve FPGA part numarasını kesinleştir — PYNQ-Z2, `xc7z020clg400-1` ([[ADR-001 Board ve Araç Sürümü]]).
-- [x] Vivado/Vitis sürümünü kesinleştir — Vivado 2024.1 + PYNQ v3.1 ([[ADR-001 Board ve Araç Sürümü]]).
+- [x] Vivado/Vitis sürümünü kesinleştir — Vivado 2025.1 ([[ADR-001 Board ve Araç Sürümü]]); PYNQ image eşleşmesi açık.
 - [ ] Repo ve klasör yapısını oluştur.
 - [ ] Ölçülebilir gereksinimleri yaz.
 - [x] LeNet tensor boyutlarını tabloya dök — [[ADR-002 CNN Topolojisi ve Dataset]].

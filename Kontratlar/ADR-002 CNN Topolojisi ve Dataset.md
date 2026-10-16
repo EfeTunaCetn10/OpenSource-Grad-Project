@@ -56,6 +56,16 @@ array'den türetilmiş planlama hesabıdır. Matrix mapping'de `M=output channel
 | FC2 | `84×1×120` | `11×1 = 11` | 15 | 165 |
 | FC3 | `10×1×84` | `2×1 = 2` | 11 | 22 |
 
+> [!important] 2026-10-07 ölçümü: bu tablonun "Output tile" sütunu **paketlenmiş** sayıdır,
+> gerçek RTL schedule'ı ise **satır sınırlı**. `window_gen` her output satırını kendi içinde
+> sekizlik tile'lara bölüyor, yani conv1'in 28 kolonu satır başına `8/8/8/4` dört tile
+> ediyor: `28 × 4 = 112` invocation, tablodaki `ceil(784/8) = 98` değil. Aynı sebeple conv2
+> `10 × ceil(10/8) × 2 = 40`, tablodaki 26 değil. Fark kayıp iş değil, **partial tile**:
+> 98 ve 26 ancak pozisyonlar satır sınırını aşarak paketlenirse çıkar, o da pencerenin satır
+> geometrisini bozar. 112 sayısı `tb_conv1_top`'ta `tile_count` olarak ölçüldü
+> ([[ADR-018 K-Streaming ve Ara Aktivasyon Düzeni|ADR-018]] 2026-10-07 ek maddesi). Tablo
+> referans model kontratı olarak paketlenmiş hâliyle duruyor; donanım sayısı satır sınırlıdır.
+
 Buradaki `FC1 = 15 tile`, yalnızca `ceil(120/8)` output-channel tile sayısıdır. Mevcut
 RTL'nin `K_MAX=8` tile-engine sınırıyla `K=400` ayrıca 50 K chunk'a bölünür ve partial
 sonuçların accumulation edilmesi gerekir. Önerilen K-streaming tasarımında bu 50 ayrı

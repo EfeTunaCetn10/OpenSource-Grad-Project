@@ -67,3 +67,41 @@ yapılsaydı aynı DSP bütçesiyle daha büyük bir array mümkün olabilirdi. 
 taşınabilirlik ve sentez basitliği, DSP yoğunluğuna tercih edildi. %29 DSP kullanımı zaten
 geniş marj bıraktığı için bu feragatin pratik maliyeti yok. Ayrıca bkz.
 [[Kontrat Değerlendirmesi]].
+
+## ✅ Sentezle doğrulandı — 2026-09-26
+
+Bu ADR'nin "64 PE = 64 DSP48E1" eşlemesi ve `%29 DSP` tahmini **ilk kez gerçek netlist
+üzerinde ölçüldü.** Projede daha önce hiç sentez koşmamıştı.
+
+`vivado -mode batch -source vivado/check_synth.tcl`, Vivado 2025.1, `xc7z020clg400-1`,
+out-of-context, top `systolic_array_8x8`:
+
+| Kaynak | Kullanılan | XC7Z020 | Oran |
+|---|---:|---:|---:|
+| **DSP48E1** | **64** | 220 | **%29,1** |
+| Slice LUT | 1.160 | 53.200 | %2,2 |
+| Flip-flop | 960 | 106.400 | %0,9 |
+| SRL | 56 | — | skew gecikme bankaları |
+| BRAM | 0 | 140 | — |
+
+**`DSP_CHECK: found 64 DSP48 cells; expected 64`** — tam bir PE'ye bir DSP. `use_dsp`
+özniteliği tek başına kanıt sayılmıyordu; netlist'teki gerçek primitive sayısı sayıldı.
+
+**`WNS_CHECK: worst slack 3.074 ns`** — 100 MHz'de timing **3,07 ns marjla kapanıyor**.
+[[ADR-008 Clock Domain Stratejisi|ADR-008]]'in "tek clock domain, DSP'nin Fmax'i darboğaz
+değil" gerekçesi ölçümle destekleniyor ve iki domain'e geçiş tetikleyicisi (WNS negatif)
+tetiklenmedi.
+
+**Okunması gereken sonuç:** hesap çekirdeği alan olarak **çok küçük** (%2,2 LUT). Geriye kalan
+line buffer, window generator, register file, requantizer ×8 ve output packer için kaynak
+sıkışıklığı beklenmiyor; **bağlayıcı kaynak DSP** ve orada da %71 boş.
+
+> Ölçüm `compute_engine` + array çekirdeğini kapsıyor; `requant_unit`, register file ve bellek
+> altsistemleri henüz top'a bağlı değil. Tam sistem sentezi
+> [[ADR-017 Simülasyon ve Emülasyon Ortamı|ADR-017]] Kademe 3'ten sonra koşacak; `LAT = 3`
+> kararı orada kesinleşecek.
+>
+> **Tcl tuzağı (kaybedilen yarım gün):** `create_clock ... [get_ports clk]` `synth_design`'dan
+> **önce** çağrılırsa `No open design` ile patlar (henüz elaborate edilmiş netlist yok),
+> **sonra** çağrılırsa sentezi hiç kısıtlamaz. Tek doğru sıralama kısıtı bir XDC'ye koyup
+> `read_xdc` ile okumaktır — `vivado/constraints.xdc` bu yüzden var.
