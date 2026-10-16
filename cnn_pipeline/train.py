@@ -16,7 +16,7 @@ from model import LeNet5, count_parameters
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a 32x32 LeNet-5 baseline")
     parser.add_argument("--dataset", choices=("mnist", "insects"), required=True)
-    parser.add_argument("--model-version", choices=("v1", "v2"), default="v1")
+    parser.add_argument("--model-version", choices=("v1", "v2", "v3"), default="v1")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--stats", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
@@ -135,10 +135,29 @@ def build_loss_functions(label_smoothing: float, class_weights=None):
             nn.CrossEntropyLoss())
 
 
+def build_model(version: str, input_channels: int, num_classes: int) -> nn.Module:
+    """Explicit experimental selection; v1 construction stays unchanged."""
+    if version == "v1":
+        return LeNet5(input_channels, num_classes)
+    if version == "v2":
+        from model_v2 import LeNetV2
+        if input_channels != 3 or num_classes != 10:
+            raise ValueError("experimental v2 requires RGB inputs and 10 classes")
+        return LeNetV2()
+    if version == "v3":
+        from model_v3 import CompactCNNV3
+        if input_channels != 3:
+            raise ValueError("experimental v3 requires RGB inputs")
+        return CompactCNNV3(num_classes)
+    raise ValueError(f"Unknown model version: {version}")
+
+
 def main() -> None:
     args = parse_args()
-    if args.model_version == "v2" and args.dataset != "insects":
-        raise ValueError("experimental v2 supports the RGB insect dataset only")
+    if args.model_version in ("v2", "v3") and args.dataset != "insects":
+        raise ValueError(f"experimental {args.model_version} supports the RGB insect dataset only")
+    if args.model_version == "v3" and args.output_dir.exists():
+        raise FileExistsError(f"Use a new v3 experiment directory: {args.output_dir}")
     if not 0.0 <= args.label_smoothing <= 1.0:
         raise ValueError("label smoothing must be finite and between 0 and 1")
     if args.epochs <= 0 or args.batch_size <= 0:
@@ -183,13 +202,7 @@ def main() -> None:
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Use a new output directory to preserve previous results: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
-    if args.model_version == "v2":
-        from model_v2 import LeNetV2
-        if bundle.input_channels != 3 or len(bundle.class_names) != 10:
-            raise ValueError("experimental v2 requires RGB inputs and 10 classes")
-        model = LeNetV2().to(device)
-    else:
-        model = LeNet5(bundle.input_channels, len(bundle.class_names)).to(device)
+    model = build_model(args.model_version, bundle.input_channels, len(bundle.class_names)).to(device)
     class_weights, class_counts = None, None
     if args.class_weighted:
         class_weights, class_counts = training_class_weights(
@@ -205,8 +218,8 @@ def main() -> None:
         "validation_loss": "unweighted cross entropy",
         "source_sha256": {
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in (("train.py", "data.py", "model.py", "model_v2.py")
-                         if args.model_version == "v2" else ("train.py", "data.py", "model.py"))
+            for name in (("train.py", "data.py", "model.py") +
+                         (() if args.model_version == "v1" else (f"model_{args.model_version}.py",)))
         },
     }
     (output_dir / "run_config.json").write_text(json.dumps(run_config, indent=2) + "\n")
@@ -250,7 +263,8 @@ def main() -> None:
             torch.save(
                 {
                     "model_state": model.state_dict(),
-                    "model_name": "LeNetV2Conv8x24FC64x32" if args.model_version == "v2" else "LeNet5ReLUMaxPool",
+                    "model_name": {"v1": "LeNet5ReLUMaxPool", "v2": "LeNetV2Conv8x24FC64x32",
+                                   "v3": "CompactCNNV3"}[args.model_version],
                     "input_channels": bundle.input_channels,
                     "image_size": [32, 32],
                     "class_names": bundle.class_names,
