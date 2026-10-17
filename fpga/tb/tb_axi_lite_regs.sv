@@ -368,6 +368,15 @@ module tb_axi_lite_regs;
         axi_read(12'h010, 1, value);
         check(value == 32'h25A5_5A5A, "LAYER_CFG[31] RAZ/WI failed");
 
+        // v3 FC1 feasibility: direct core K=512 is not an encodable c_in
+        // in this unchanged register map. No implicit zero-means-512 policy.
+        check($bits(cfg_c_in)==9, "c_in field width changed");
+        axi_write(12'h010, (32'd1<<12)|(32'd1<<9)|32'd511, 4'hF, 1'b1, 0, 0);
+        check(cfg_c_in==511 && cfg_kh==1 && cfg_kw==1, "maximum c_in decode");
+        axi_write(12'h010, (32'd1<<12)|(32'd1<<9)|32'd512, 4'hF, 1'b1, 0, 0);
+        check(cfg_c_in==0 && cfg_kh==1 && cfg_kw==1,
+              "512 must not be silently interpreted as an encodable c_in");
+
         // The counters are direct datapath inputs and counter_clear is the
         // SOFT_RESET contract to their owner.
         axi_read(12'h100, 0, value); check(value == 123, "CYCLE_COUNT read mismatch");

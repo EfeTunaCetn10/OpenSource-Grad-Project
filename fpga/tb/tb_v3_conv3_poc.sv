@@ -1,26 +1,29 @@
 `timescale 1ns/1ps
-// Real v3 Conv3: Pool2 tile-major vectors, four channel passes, two stall patterns.
-module tb_v3_conv3_poc;
+// Real v3 Conv3 / FC1 / FC2 vectors, channel replay, two stall patterns.
+// Shared scoreboard: Conv3 and isolated FC reuse the same compute/requant path.
+module v3_layer_poc_case #(parameter int FC=0);
     localparam int ROWS       = 8;
     localparam int COLS       = 8;
     localparam int DATA_WIDTH = 8;
     localparam int ACC_WIDTH  = 32;
     localparam int M0_W       = 18;
 
-    localparam int KERN_H = 3;
-    localparam int KERN_W = 3;
-    localparam int C_IN   = 24;
-    localparam int IN_H   = 8;
-    localparam int IN_W   = 8;
-    localparam int C_OUT  = 8; // physical lanes per pass, 32 logical channels
+    localparam int KERN_H = FC ? 1 : 3;
+    localparam int KERN_W = FC ? 1 : 3;
+    localparam int C_IN   = FC==1 ? 512 : FC==2 ? 64 : 24;
+    localparam int IN_H   = FC ? 1 : 8;
+    localparam int IN_W   = FC ? 1 : 8;
+    localparam int CHANNELS = FC==1 ? 64 : FC==2 ? 10 : 32;
+    localparam int PASSES=(CHANNELS+7)/8;
+    int active_rows;
 
-    localparam int K_LEN       = C_IN * KERN_H * KERN_W;   // 216
-    localparam int OUT_H       = IN_H;        // 8
-    localparam int OUT_W       = IN_W;        // 8
-    localparam int TILES_PER_ROW = (OUT_W + COLS - 1) / COLS;  // 1
-    localparam int TILES       = OUT_H * TILES_PER_ROW;    // 8
-    localparam int OUT_BEATS   = OUT_H * OUT_W;            // 64
-    localparam int FRAME_BEATS = (IN_H * IN_W * C_IN) / 8; // 192
+    localparam int K_LEN       = C_IN * KERN_H * KERN_W;
+    localparam int OUT_H       = IN_H;
+    localparam int OUT_W       = IN_W;
+    localparam int TILES_PER_ROW = (OUT_W + COLS - 1) / COLS;
+    localparam int TILES       = OUT_H * TILES_PER_ROW;
+    localparam int OUT_BEATS   = OUT_H * OUT_W;
+    localparam int FRAME_BEATS = (IN_H * IN_W * C_IN) / 8;
 
     localparam int K_MAX    = 1024;
     localparam int TILE_MAX = 16;
@@ -44,7 +47,7 @@ module tb_v3_conv3_poc;
     logic [31:0] acc_mem   [0:OUT_BEATS*ROWS-1];
     logic [7:0]  tile_cols [0:TILES-1];
     logic [31:0] biased_mem [0:OUT_BEATS*ROWS-1];
-    string vector_dir = "../../../cnn_pipeline/outputs/model_v3_compact_seed42_60epochs/insects/rtl_conv3_poc";
+    string vector_dir = FC==1 ? "../../../cnn_pipeline/outputs/model_v3_compact_seed42_60epochs/insects/rtl_fc_poc/fc1" : FC==2 ? "../../../cnn_pipeline/outputs/model_v3_compact_seed42_60epochs/insects/rtl_fc_poc/fc2" : "../../../cnn_pipeline/outputs/model_v3_compact_seed42_60epochs/insects/rtl_conv3_poc";
     int channel_tile;
     int bias_beats [0:7];
     logic restart, restart_error;
@@ -91,7 +94,23 @@ module tb_v3_conv3_poc;
     logic        drain_stall;
     logic [31:0] engine_cycle_count;
 
-    v3_conv3_poc_top #(
+    logic dense_valid,dense_ready,dense_last,repack_error,core_restart_error;
+    logic [63:0] dense_data;
+    assign restart_error=repack_error|core_restart_error;
+    generate if(FC==0) begin : repack
+        tile_major_repack #(.CHANNELS(C_IN),.HEIGHT(IN_H),.WIDTH(IN_W)) adapter(
+            .clk(clk),.rst_n(rst_n),.restart(restart),
+            .s_valid(s_valid),.s_ready(s_ready),.s_data(s_data),.s_last(s_last),
+            .m_valid(dense_valid),.m_ready(dense_ready),.m_data(dense_data),.m_last(dense_last),
+            .done(),.error(repack_error));
+    end else begin : fc_stream
+        assign dense_valid=s_valid;
+        assign s_ready=dense_ready;
+        assign dense_data=s_data;
+        assign dense_last=s_last;
+        assign repack_error=0;
+    end endgenerate
+    conv1_top #(
         .ROWS       (ROWS),
         .COLS       (COLS),
         .DATA_WIDTH (DATA_WIDTH),
@@ -103,18 +122,18 @@ module tb_v3_conv3_poc;
         .IN_H       (IN_H),
         .IN_W       (IN_W),
         .STRIDE     (1),
-        .PAD        (1),
+        .PAD        (FC ? 0 : 1),
         .K_MAX      (K_MAX),
         .TILE_MAX   (TILE_MAX),
         .W_DEPTH    (W_DEPTH)
-    ) dut (
+    ) u_core (
         .clk                (clk),
         .rst_n              (rst_n),
-        .restart(restart), .restart_error(restart_error),
-        .s_valid            (s_valid),
-        .s_ready            (s_ready),
-        .s_data             (s_data),
-        .s_last             (s_last),
+        .restart(restart), .restart_error(core_restart_error),
+        .s_valid            (dense_valid),
+        .s_ready            (dense_ready),
+        .s_data             (dense_data),
+        .s_last             (dense_last),
         .w_wr_en            (w_wr_en),
         .w_wr_bank          (w_wr_bank),
         .w_wr_addr          (w_wr_addr),
@@ -178,24 +197,25 @@ module tb_v3_conv3_poc;
             $readmemh({vector_dir,"/frame.mem"}, frame_mem);
             for (int r=0; r<8; r++) begin
                 path=$sformatf("%s/wbank%0d.mem",vector_dir,r);
-                $readmemh(path,wbank_tmp,0,4*K_LEN-1);
-                for (int a=0; a<4*K_LEN; a++) begin
+                $readmemh(path,wbank_tmp,0,PASSES*K_LEN-1);
+                for (int a=0; a<PASSES*K_LEN; a++) begin
                     @(negedge clk);
                     w_wr_en=1; w_wr_bank=r; w_wr_addr=a; w_wr_data=wbank_tmp[a];
                     @(posedge clk);
                 end
             end
             @(negedge clk); w_wr_en=0;
-            for (int t=0;t<TILES;t++) tile_cols[t]=8;
+            for (int t=0;t<TILES;t++) tile_cols[t]=OUT_W<8 ? OUT_W : 8;
         end
     endtask
 
     task automatic load_pass(input int ct);
-        logic [31:0] biases [0:31];
-        logic [17:0] multipliers [0:31];
-        logic [5:0] shifts [0:31];
+        logic [31:0] biases [0:PASSES*8-1];
+        logic [17:0] multipliers [0:PASSES*8-1];
+        logic [5:0] shifts [0:PASSES*8-1];
         begin
             channel_tile=ct;
+            active_rows=(CHANNELS-ct*8)<8 ? CHANNELS-ct*8 : 8;
             $readmemh({vector_dir,"/bias_q.mem"},biases);
             $readmemh({vector_dir,"/M0.mem"},multipliers);
             $readmemh({vector_dir,"/n.mem"},shifts);
@@ -203,7 +223,7 @@ module tb_v3_conv3_poc;
                 cfg_bias_q[r]=biases[ct*8+r];
                 cfg_m0[r]=multipliers[ct*8+r];
                 cfg_shift_n[r]=shifts[ct*8+r];
-                cfg_relu[r]=1;
+                cfg_relu[r]=(FC!=2);
                 bias_beats[r]=0;
             end
             $readmemh($sformatf("%s/t%0d_y.mem",vector_dir,ct),y_mem);
@@ -231,7 +251,7 @@ module tb_v3_conv3_poc;
         end
     endtask
 
-    // Feed the whole 192-beat tile-major frame.  `gap_mode` 0 is full rate, 1 inserts
+    // Feed the complete physical input frame.  `gap_mode` 0 is full rate, 1 inserts
     // pseudo-random gaps so the generator's input side is starved too.
     task automatic feed_frame(input int gap_mode);
         begin
@@ -297,10 +317,10 @@ module tb_v3_conv3_poc;
                              m_y_flat, y_mem[out_beats_seen]);
                     err_out++;
                 end
-                if (m_lane_valid !== 8'((1 << C_OUT) - 1)) begin
+                if (m_lane_valid !== 8'((1 << active_rows) - 1)) begin
                     $display("FAIL: beat %0d lane_valid %02h expected %02h",
                              out_beats_seen, m_lane_valid,
-                             8'((1 << C_OUT) - 1));
+                             8'((1 << active_rows) - 1));
                     err_out++;
                 end
                 if (m_col !== COL_W'(col_in_tile)) begin
@@ -335,18 +355,18 @@ module tb_v3_conv3_poc;
 
     // -- scoreboard: engine/requant seam (INT32 accumulators) -------------
     always @(posedge clk) begin
-        if (rst_n && checking && dut.u_core.acc_valid && dut.u_core.acc_ready) begin
+        if (rst_n && checking && u_core.acc_valid && u_core.acc_ready) begin
             if (acc_beats_seen >= OUT_BEATS) begin
                 $display("FAIL: extra accumulator beat %0d", acc_beats_seen);
                 err_acc++;
             end else begin
                 for (int lane = 0; lane < ROWS; lane++) begin
-                    if (dut.u_core.acc_lane_valid[lane] &&
-                        dut.u_core.acc_flat[lane*ACC_WIDTH +: ACC_WIDTH] !==
+                    if (u_core.acc_lane_valid[lane] &&
+                        u_core.acc_flat[lane*ACC_WIDTH +: ACC_WIDTH] !==
                         acc_mem[acc_beats_seen*ROWS + lane]) begin
                         $display("FAIL: acc beat %0d lane %0d = %08h expected %08h",
                                  acc_beats_seen, lane,
-                                 dut.u_core.acc_flat[lane*ACC_WIDTH +: ACC_WIDTH],
+                                 u_core.acc_flat[lane*ACC_WIDTH +: ACC_WIDTH],
                                  acc_mem[acc_beats_seen*ROWS + lane]);
                         err_acc++;
                     end
@@ -358,10 +378,10 @@ module tb_v3_conv3_poc;
 
     generate for(genvar lane=0;lane<8;lane++) begin : bias_score
         always @(posedge clk) begin
-            if(rst_n && checking && dut.u_core.u_requant.g_lane[lane].u_req.in_valid &&
-               dut.u_core.u_requant.g_lane[lane].u_req.in_ready) begin
+            if(rst_n && checking && u_core.u_requant.g_lane[lane].u_req.in_valid &&
+               u_core.u_requant.g_lane[lane].u_req.in_ready) begin
                 if(bias_beats[lane]>=OUT_BEATS) $fatal(1,"extra biased value");
-                if(dut.u_core.u_requant.g_lane[lane].u_req.s0_a_comb !==
+                if(u_core.u_requant.g_lane[lane].u_req.s0_a_comb !==
                    biased_mem[bias_beats[lane]*8+lane])
                     $fatal(1,"biased mismatch tile %0d lane %0d beat %0d",channel_tile,lane,bias_beats[lane]);
                 bias_beats[lane]++;
@@ -424,7 +444,7 @@ module tb_v3_conv3_poc;
             col_in_tile    = 0;
             checking       = 1'b1;
 
-            cfg_active_rows = ROW_W'(C_OUT);
+            cfg_active_rows = ROW_W'(active_rows);
             cfg_k_len       = K_W'(K_LEN);
             cfg_tile_idx    = TILE_W'(channel_tile);
 
@@ -481,7 +501,7 @@ module tb_v3_conv3_poc;
             // Keep monitors armed beyond the expected last beat to catch extras.
             repeat (20) @(negedge clk);
             for (int r=0;r<8;r++)
-                if (bias_beats[r] != OUT_BEATS) $fatal(1,"bias count lane %0d",r);
+                if (bias_beats[r] != (r<active_rows ? OUT_BEATS : 0)) $fatal(1,"bias count lane %0d",r);
             if (restart_error) $fatal(1,"restart rejected");
             checking = 1'b0;
             $display("[%s] %0d output beats, %0d accumulator beats, %0d tiles, engine cycles %0d",
@@ -504,20 +524,20 @@ module tb_v3_conv3_poc;
 
         // TB supplies the outer channel loop. No full-network controller claim.
         for (int pattern=1;pattern<=2;pattern++) begin
-            for (int ct=0;ct<4;ct++) begin
+            for (int ct=0;ct<PASSES;ct++) begin
                 if (pattern!=1 || ct!=0) begin
                     @(negedge clk); restart=1;
                     @(negedge clk); restart=0;
                     repeat(3) @(negedge clk);
                 end
                 load_pass(ct);
-                run_frame(1,pattern,$sformatf("pattern%0d channels%0d..%0d",pattern,ct*8,ct*8+7));
+                run_frame(1,pattern,$sformatf("pattern%0d channels%0d..%0d",pattern,ct*8,ct*8+active_rows-1));
             end
         end
 
         if (err_seq + err_out + err_acc + err_status == 0)
-            $display("PASS tb_v3_conv3_poc: 2048 INT8 + MAC + biased values per pattern; two patterns; %0d tiles/pass, %0d beats/pass",
-                     TILES, OUT_BEATS);
+            $display("PASS shared v3 layer: %0d INT8 + MAC + biased values per pattern; two patterns; K=%0d, %0d tiles/pass, %0d beats/pass",
+                     CHANNELS*OUT_BEATS, K_LEN, TILES, OUT_BEATS);
         else
             $display("FAIL tb_v3_conv3_poc: %0d errors (seq %0d, out %0d, acc %0d, status %0d)",
                      err_seq + err_out + err_acc + err_status,
@@ -533,3 +553,7 @@ module tb_v3_conv3_poc;
         $finish;
     end
 endmodule
+
+module tb_v3_conv3_poc; v3_layer_poc_case #(.FC(0)) test_case(); endmodule
+module tb_v3_fc1_poc; v3_layer_poc_case #(.FC(1)) test_case(); endmodule
+module tb_v3_fc2_poc; v3_layer_poc_case #(.FC(2)) test_case(); endmodule
