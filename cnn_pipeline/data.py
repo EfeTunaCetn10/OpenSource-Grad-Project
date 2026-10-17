@@ -91,10 +91,10 @@ def build_mnist_loaders(
     )
 
 
-def build_insect_eval_transform(mean: Sequence[float], std: Sequence[float]) -> transforms.Compose:
+def build_insect_eval_transform(mean: Sequence[float], std: Sequence[float], image_size: int = 32) -> transforms.Compose:
     """Shared deterministic preprocessing for evaluation and train-only calibration."""
     return transforms.Compose(
-        [transforms.Resize((32, 32)), transforms.ToTensor(), transforms.Normalize(mean, std)]
+        [transforms.Resize((image_size, image_size)), transforms.ToTensor(), transforms.Normalize(mean, std)]
     )
 
 
@@ -108,6 +108,7 @@ def build_insect_loaders(
     limit_eval: int | None = None,
     train_resize: bool = False,
     train_color_jitter: bool = True,
+    image_size: int = 32,
 ) -> DataBundle:
     for split in ("train", "val", "test"):
         if not (data_dir / split).is_dir():
@@ -116,8 +117,8 @@ def build_insect_loaders(
     mean, std = _read_stats(stats_path)
     train_transform = transforms.Compose(
         [
-            transforms.Resize((32, 32)) if train_resize else
-            transforms.RandomResizedCrop(32, scale=(0.80, 1.0)),
+            transforms.Resize((image_size, image_size)) if train_resize else
+            transforms.RandomResizedCrop(image_size, scale=(0.80, 1.0)),
             transforms.RandomHorizontalFlip(),
             *([transforms.ColorJitter(brightness=0.15, contrast=0.15, saturation=0.10)]
               if train_color_jitter else []),
@@ -125,7 +126,7 @@ def build_insect_loaders(
             transforms.Normalize(mean, std),
         ]
     )
-    eval_transform = build_insect_eval_transform(mean, std)
+    eval_transform = build_insect_eval_transform(mean, std, image_size)
 
     train = datasets.ImageFolder(data_dir / "train", transform=train_transform)
     val = datasets.ImageFolder(data_dir / "val", transform=eval_transform)

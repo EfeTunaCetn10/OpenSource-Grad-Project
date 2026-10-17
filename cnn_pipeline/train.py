@@ -5,6 +5,7 @@ import hashlib
 import json
 import random
 from pathlib import Path
+from dataclasses import replace
 
 import torch
 from torch import nn
@@ -16,7 +17,7 @@ from model import LeNet5, count_parameters
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a 32x32 LeNet-5 baseline")
     parser.add_argument("--dataset", choices=("mnist", "insects"), required=True)
-    parser.add_argument("--model-version", choices=("v1", "v2", "v3"), default="v1")
+    parser.add_argument("--model-version", choices=("v1", "v2", "v3", "v3_48"), default="v1")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--stats", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
@@ -32,6 +33,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit-eval", type=int)
     parser.add_argument("--skip-test", action="store_true",
                         help="Only train/validate; reserve test evaluation for the final run")
+    parser.add_argument("--weighted-sampler", action="store_true",
+                        help="Training only: inverse-frequency sampling with replacement, one dataset length per epoch")
     parser.add_argument("--class-weighted", action="store_true",
                         help="Weight training cross entropy by inverse training class frequency")
     parser.add_argument("--class-weight-power", type=float, default=1.0,
@@ -44,16 +47,33 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def training_labels(dataset):
+    if isinstance(dataset, torch.utils.data.Subset):
+        return training_labels(dataset.dataset)[torch.as_tensor(dataset.indices, dtype=torch.long)]
+    return torch.as_tensor(dataset.targets, dtype=torch.long)
+
+
+def with_weighted_training_sampler(bundle, seed):
+    """Replace only training sampling; keep transforms, epoch size and eval loaders."""
+    loader = bundle.train_loader
+    _, counts = training_class_weights(loader.dataset, len(bundle.class_names))
+    weights = counts.double().reciprocal()[training_labels(loader.dataset)]
+    sampler = torch.utils.data.WeightedRandomSampler(
+        weights, num_samples=len(loader.dataset), replacement=True,
+        generator=torch.Generator().manual_seed(seed))
+    train_loader = torch.utils.data.DataLoader(
+        loader.dataset, batch_size=loader.batch_size, sampler=sampler,
+        num_workers=loader.num_workers, pin_memory=loader.pin_memory,
+        persistent_workers=loader.persistent_workers, generator=loader.generator,
+        collate_fn=loader.collate_fn, drop_last=loader.drop_last)
+    return replace(bundle, train_loader=train_loader), counts
+
+
 def training_class_weights(dataset, num_classes: int, power: float = 1.0) -> tuple[torch.Tensor, torch.Tensor]:
     """Read training labels without loading images or consuming augmentation RNG."""
     if not 0.0 <= power <= 1.0:
         raise ValueError("Class weight power must be between 0 and 1")
-    def labels(ds):
-        if isinstance(ds, torch.utils.data.Subset):
-            return labels(ds.dataset)[torch.as_tensor(ds.indices, dtype=torch.long)]
-        return torch.as_tensor(ds.targets, dtype=torch.long)
-
-    targets = labels(dataset)
+    targets = training_labels(dataset)
     if targets.numel() == 0 or targets.min() < 0 or targets.max() >= num_classes:
         raise ValueError("Training labels must be nonempty and within class range")
     counts = torch.bincount(targets, minlength=num_classes)
@@ -144,6 +164,11 @@ def build_model(version: str, input_channels: int, num_classes: int) -> nn.Modul
         if input_channels != 3 or num_classes != 10:
             raise ValueError("experimental v2 requires RGB inputs and 10 classes")
         return LeNetV2()
+    if version == "v3_48":
+        from model_v3_48 import CompactCNNV3_48
+        if input_channels != 3:
+            raise ValueError("experimental v3_48 requires RGB inputs")
+        return CompactCNNV3_48(num_classes)
     if version == "v3":
         from model_v3 import CompactCNNV3
         if input_channels != 3:
@@ -154,10 +179,10 @@ def build_model(version: str, input_channels: int, num_classes: int) -> nn.Modul
 
 def main() -> None:
     args = parse_args()
-    if args.model_version in ("v2", "v3") and args.dataset != "insects":
+    if args.model_version in ("v2", "v3", "v3_48") and args.dataset != "insects":
         raise ValueError(f"experimental {args.model_version} supports the RGB insect dataset only")
-    if args.model_version == "v3" and args.output_dir.exists():
-        raise FileExistsError(f"Use a new v3 experiment directory: {args.output_dir}")
+    if args.model_version in ("v3", "v3_48") and args.output_dir.exists():
+        raise FileExistsError(f"Use a new {args.model_version} experiment directory: {args.output_dir}")
     if not 0.0 <= args.label_smoothing <= 1.0:
         raise ValueError("label smoothing must be finite and between 0 and 1")
     if args.epochs <= 0 or args.batch_size <= 0:
@@ -170,6 +195,8 @@ def main() -> None:
         raise ValueError("--train-resize is only supported for insects")
     if args.no_color_jitter and args.dataset != "insects":
         raise ValueError("--no-color-jitter is only supported for insects")
+    if args.weighted_sampler and args.class_weighted:
+        raise ValueError("Use sampling or loss weighting, not both in this controlled experiment")
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     pin_memory = device.type == "cuda"
@@ -196,14 +223,19 @@ def main() -> None:
             args.limit_eval,
             train_resize=args.train_resize,
             train_color_jitter=not args.no_color_jitter,
+            image_size=48 if args.model_version == "v3_48" else 32,
         )
+
+    sampler_counts = None
+    if args.weighted_sampler:
+        bundle, sampler_counts = with_weighted_training_sampler(bundle, args.seed)
 
     output_dir = args.output_dir / args.dataset
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Use a new output directory to preserve previous results: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
     model = build_model(args.model_version, bundle.input_channels, len(bundle.class_names)).to(device)
-    class_weights, class_counts = None, None
+    class_weights, class_counts = None, sampler_counts
     if args.class_weighted:
         class_weights, class_counts = training_class_weights(
             bundle.train_loader.dataset, len(bundle.class_names), args.class_weight_power)
@@ -216,10 +248,14 @@ def main() -> None:
         "class_weights": class_weights.tolist() if class_weights is not None else None,
         "train_class_counts": class_counts.tolist() if class_counts is not None else None,
         "validation_loss": "unweighted cross entropy",
+        "sampling_policy": ({"weights": "1/train_class_count", "replacement": True,
+                             "samples_per_epoch": len(bundle.train_loader.dataset), "seed": args.seed}
+                            if args.weighted_sampler else None),
         "source_sha256": {
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
             for name in (("train.py", "data.py", "model.py") +
-                         (() if args.model_version == "v1" else (f"model_{args.model_version}.py",)))
+                         (() if args.model_version == "v1" else (f"model_{args.model_version}.py",)) +
+                         (("model_v3.py",) if args.model_version == "v3_48" else ()))
         },
     }
     (output_dir / "run_config.json").write_text(json.dumps(run_config, indent=2) + "\n")
@@ -264,9 +300,9 @@ def main() -> None:
                 {
                     "model_state": model.state_dict(),
                     "model_name": {"v1": "LeNet5ReLUMaxPool", "v2": "LeNetV2Conv8x24FC64x32",
-                                   "v3": "CompactCNNV3"}[args.model_version],
+                                   "v3": "CompactCNNV3", "v3_48": "CompactCNNV3_48"}[args.model_version],
                     "input_channels": bundle.input_channels,
-                    "image_size": [32, 32],
+                    "image_size": [48, 48] if args.model_version == "v3_48" else [32, 32],
                     "class_names": bundle.class_names,
                     "mean": bundle.mean,
                     "std": bundle.std,

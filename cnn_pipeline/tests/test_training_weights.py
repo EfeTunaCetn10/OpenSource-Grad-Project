@@ -53,3 +53,29 @@ def test_square_root_softens_relative_weights():
 def test_invalid_weight_power(power):
     with pytest.raises(ValueError):
         training_class_weights(LabelsOnly(), 2, power=power)
+
+
+def test_sampler_train_only_deterministic_and_inverse_frequency():
+    from data import DataBundle, _loader
+    from train import with_weighted_training_sampler
+    ds=LabelsOnly()
+    original=DataBundle(_loader(ds,2,True,0,False),_loader(ds,2,False,0,False),
+                        _loader(ds,2,False,0,False),3,['a','b'],[0]*3,[1]*3)
+    state=torch.get_rng_state()
+    first,counts=with_weighted_training_sampler(original,42)
+    second,_=with_weighted_training_sampler(original,42)
+    assert torch.equal(state,torch.get_rng_state())
+    assert first.val_loader is original.val_loader
+    assert first.test_loader is original.test_loader
+    assert first.train_loader.dataset is original.train_loader.dataset
+    assert first.train_loader.batch_size==2
+    assert isinstance(original.train_loader.sampler,torch.utils.data.RandomSampler)
+    sampler=first.train_loader.sampler
+    assert counts.tolist()==[3,1]
+    assert sampler.weights.tolist()==pytest.approx([1/3,1/3,1/3,1])
+    assert sampler.replacement and sampler.num_samples==len(ds)
+    seq1=[list(sampler) for _ in range(5)]
+    assert seq1==[list(second.train_loader.sampler) for _ in range(5)]
+    third,_=with_weighted_training_sampler(original,123)
+    assert seq1!=[list(third.train_loader.sampler) for _ in range(5)]
+    assert all(len(epoch)==4 and all(0<=i<4 for i in epoch) for epoch in seq1)
