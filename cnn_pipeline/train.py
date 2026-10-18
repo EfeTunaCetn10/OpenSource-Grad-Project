@@ -17,7 +17,7 @@ from model import LeNet5, count_parameters
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Train a 32x32 LeNet-5 baseline")
     parser.add_argument("--dataset", choices=("mnist", "insects"), required=True)
-    parser.add_argument("--model-version", choices=("v1", "v2", "v3", "v3_48"), default="v1")
+    parser.add_argument("--model-version", choices=("v1", "v2", "v3", "v3_48", "v3_48_deep"), default="v1")
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--stats", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("outputs"))
@@ -164,6 +164,11 @@ def build_model(version: str, input_channels: int, num_classes: int) -> nn.Modul
         if input_channels != 3 or num_classes != 10:
             raise ValueError("experimental v2 requires RGB inputs and 10 classes")
         return LeNetV2()
+    if version == "v3_48_deep":
+        from model_v3_48_deep import CompactCNNV3_48Deep
+        if input_channels != 3:
+            raise ValueError("experimental v3_48_deep requires RGB inputs")
+        return CompactCNNV3_48Deep(num_classes)
     if version == "v3_48":
         from model_v3_48 import CompactCNNV3_48
         if input_channels != 3:
@@ -179,9 +184,9 @@ def build_model(version: str, input_channels: int, num_classes: int) -> nn.Modul
 
 def main() -> None:
     args = parse_args()
-    if args.model_version in ("v2", "v3", "v3_48") and args.dataset != "insects":
+    if args.model_version in ("v2", "v3", "v3_48", "v3_48_deep") and args.dataset != "insects":
         raise ValueError(f"experimental {args.model_version} supports the RGB insect dataset only")
-    if args.model_version in ("v3", "v3_48") and args.output_dir.exists():
+    if args.model_version in ("v3", "v3_48", "v3_48_deep") and args.output_dir.exists():
         raise FileExistsError(f"Use a new {args.model_version} experiment directory: {args.output_dir}")
     if not 0.0 <= args.label_smoothing <= 1.0:
         raise ValueError("label smoothing must be finite and between 0 and 1")
@@ -223,7 +228,7 @@ def main() -> None:
             args.limit_eval,
             train_resize=args.train_resize,
             train_color_jitter=not args.no_color_jitter,
-            image_size=48 if args.model_version == "v3_48" else 32,
+            image_size=48 if args.model_version in ("v3_48", "v3_48_deep") else 32,
         )
 
     sampler_counts = None
@@ -255,7 +260,8 @@ def main() -> None:
             name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
             for name in (("train.py", "data.py", "model.py") +
                          (() if args.model_version == "v1" else (f"model_{args.model_version}.py",)) +
-                         (("model_v3.py",) if args.model_version == "v3_48" else ()))
+                         (("model_v3.py",) if args.model_version in ("v3_48", "v3_48_deep") else ()) +
+                         (("model_v3_48.py",) if args.model_version == "v3_48_deep" else ()))
         },
     }
     (output_dir / "run_config.json").write_text(json.dumps(run_config, indent=2) + "\n")
@@ -300,9 +306,10 @@ def main() -> None:
                 {
                     "model_state": model.state_dict(),
                     "model_name": {"v1": "LeNet5ReLUMaxPool", "v2": "LeNetV2Conv8x24FC64x32",
-                                   "v3": "CompactCNNV3", "v3_48": "CompactCNNV3_48"}[args.model_version],
+                                   "v3": "CompactCNNV3", "v3_48": "CompactCNNV3_48",
+                                   "v3_48_deep": "CompactCNNV3_48Deep"}[args.model_version],
                     "input_channels": bundle.input_channels,
-                    "image_size": [48, 48] if args.model_version == "v3_48" else [32, 32],
+                    "image_size": [48, 48] if args.model_version in ("v3_48", "v3_48_deep") else [32, 32],
                     "class_names": bundle.class_names,
                     "mean": bundle.mean,
                     "std": bundle.std,
