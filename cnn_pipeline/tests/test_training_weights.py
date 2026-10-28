@@ -79,3 +79,36 @@ def test_sampler_train_only_deterministic_and_inverse_frequency():
     third,_=with_weighted_training_sampler(original,123)
     assert seq1!=[list(third.train_loader.sampler) for _ in range(5)]
     assert all(len(epoch)==4 and all(0<=i<4 for i in epoch) for epoch in seq1)
+
+
+def test_targeted_weights_and_validation_loss():
+    from train import targeted_class_weights, build_loss_functions
+    names = ['bee','beetle','beetle_cocci','bug','fly','fly_sarco',
+             'fly_small','hfly_episyr','hfly_eupeo','hfly_sphaero']
+    weights = targeted_class_weights(names)
+    assert weights.tolist() == pytest.approx([1,1.15,1,1.15,1,1.15,1,1,1,1.15])
+    assert torch.equal(targeted_class_weights(names[::-1]), weights.flip(0))
+    train, val = build_loss_functions(0, weights)
+    logits = torch.arange(20, dtype=torch.float32).reshape(2,10)/10
+    targets = torch.tensor([0,1])
+    losses = nn.functional.cross_entropy(logits,targets,reduction='none')
+    assert train(logits,targets).item() == pytest.approx(((losses[0]+1.15*losses[1])/2.15).item())
+    assert val.weight is None
+    assert val(logits,targets).item() == pytest.approx(losses.mean().item())
+    normal_train, normal_val = build_loss_functions(0)
+    assert normal_train.weight is None and normal_val.weight is None
+    with pytest.raises(ValueError):
+        targeted_class_weights(names[:-1])
+    with pytest.raises(ValueError):
+        targeted_class_weights(names[:-1]+['bee'])
+
+
+def test_targeted_cli_is_opt_in(monkeypatch):
+    import sys
+    from train import parse_args
+    monkeypatch.setattr(sys,'argv',['train.py','--dataset','insects'])
+    assert not parse_args().targeted_class_weighted
+    monkeypatch.setattr(sys,'argv',['train.py','--dataset','insects','--targeted-class-weighted'])
+    args = parse_args()
+    assert args.targeted_class_weighted
+    assert not args.weighted_sampler and not args.class_weighted
