@@ -210,7 +210,7 @@ module lenet_e2e_pool #(
     logic [63:0] frame_mem [0:IN_BEATS-1];
     logic [7:0] golden [0:OUT_LEN-1];
     logic [7:0] actual [0:OUT_LEN-1];
-    logic s_valid, s_ready, s_last, m_valid, m_ready, m_last;
+    logic s_valid, s_ready, s_last, m_valid, m_ready, m_last, cfg_error;
     logic [63:0] s_data, m_data;
     logic [15:0] lfsr;
     logic was_stalled, stalled_last;
@@ -219,10 +219,13 @@ module lenet_e2e_pool #(
     int received, errors;
     string path;
 
-    pool2x2 #(.IN_H(IN_H), .IN_W(IN_W), .C_LOGICAL(CO)) dut (
-        .clk(clk), .rst_n(rst_n), .s_valid(s_valid), .s_ready(s_ready),
+    pool2x2 dut (
+        .clk(clk), .rst_n(rst_n), .cfg_in_h(6'(IN_H)),
+        .cfg_in_w(6'(IN_W)), .cfg_c_tiles(3'(NT)),
+        .s_valid(s_valid), .s_ready(s_ready),
         .s_data(s_data), .s_last(s_last), .m_valid(m_valid),
-        .m_ready(m_ready), .m_data(m_data), .m_last(m_last)
+        .m_ready(m_ready), .m_data(m_data), .m_last(m_last),
+        .cfg_error(cfg_error)
     );
 
     function automatic logic [15:0] next_lfsr(logic [15:0] v);
@@ -301,6 +304,7 @@ module lenet_e2e_pool #(
             $fatal(1,"FAIL %s timeout received=%0d/%0d",NAME,received,OUT_BEATS);
         repeat (3) @(negedge clk);
         if (m_valid) $fatal(1,"FAIL %s extra valid after completion",NAME);
+        if (cfg_error) $fatal(1,"FAIL %s unexpected pool config error",NAME);
         checking=0;
         if (errors) $fatal(1,"FAIL %s RTL boundary: %0d mismatches",NAME,errors);
         $display("PASS %s RTL boundary: %0d padded bytes across %0d tile(s)",

@@ -14,9 +14,12 @@ module pool_case #(
     localparam int TILES = (C_LOGICAL+7)/8;
     localparam int IN_BEATS = TILES*IN_H*IN_W;
     localparam int OUT_BEATS = TILES*(IN_H/2)*(IN_W/2);
+    localparam logic [5:0] CFG_IN_H = IN_H;
+    localparam logic [5:0] CFG_IN_W = IN_W;
+    localparam logic [2:0] CFG_C_TILES = TILES;
     logic [63:0] frame_mem [0:IN_BEATS-1];
     logic [63:0] expected_mem [0:OUT_BEATS-1];
-    logic s_valid, s_ready, m_valid, m_ready, m_last;
+    logic s_valid, s_ready, m_valid, m_ready, m_last, cfg_error;
     logic [63:0] s_data, m_data;
     logic [15:0] lfsr;
     int sent, received;
@@ -35,10 +38,13 @@ module pool_case #(
         end
     end
 
-    pool2x2 #(.IN_H(IN_H), .IN_W(IN_W), .C_LOGICAL(C_LOGICAL)) dut (
-        .clk(clk), .rst_n(rst_n), .s_valid(s_valid), .s_ready(s_ready),
+    pool2x2 dut (
+        .clk(clk), .rst_n(rst_n), .cfg_in_h(CFG_IN_H),
+        .cfg_in_w(CFG_IN_W), .cfg_c_tiles(CFG_C_TILES),
+        .s_valid(s_valid), .s_ready(s_ready),
         .s_data(s_data), .s_last(s_valid && sent == IN_BEATS-1),
-        .m_valid(m_valid), .m_ready(m_ready), .m_data(m_data), .m_last(m_last)
+        .m_valid(m_valid), .m_ready(m_ready), .m_data(m_data), .m_last(m_last),
+        .cfg_error(cfg_error)
     );
 
     always_ff @(posedge clk) begin
@@ -77,6 +83,10 @@ module pool_case #(
             end
 
             if (m_valid && m_ready) begin
+                if (cfg_error) begin
+                    $display("FAIL pool case %0d unexpected cfg_error", CASE_ID);
+                    $fatal(1, "unexpected pool config error");
+                end
                 if (received >= OUT_BEATS) begin
                     $display("FAIL pool case %0d extra output %h", CASE_ID, m_data);
                     $fatal(1, "extra output");

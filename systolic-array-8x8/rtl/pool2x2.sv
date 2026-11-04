@@ -3,13 +3,16 @@
 // One 64-bit beat is one pixel's TILE signed INT8 channels. Tiles are
 // serialized: all pixels of tile 0, then all pixels of tile 1, etc.
 module pool2x2 #(
-    parameter int IN_H = 28,
-    parameter int IN_W = 28,
-    parameter int C_LOGICAL = 6,
+    parameter int IN_H_MAX = 48,
+    parameter int IN_W_MAX = 48,
+    parameter int C_TILE_MAX = 4,
     parameter int TILE = 8
 ) (
     input  logic             clk,
     input  logic             rst_n,
+    input  logic [$clog2(IN_H_MAX+1)-1:0] cfg_in_h,
+    input  logic [$clog2(IN_W_MAX+1)-1:0] cfg_in_w,
+    input  logic [$clog2(C_TILE_MAX+1)-1:0] cfg_c_tiles,
     input  logic             s_valid,
     output logic             s_ready,
     input  logic [TILE*8-1:0] s_data,
@@ -17,136 +20,136 @@ module pool2x2 #(
     output logic             m_valid,
     input  logic             m_ready,
     output logic [TILE*8-1:0] m_data,
-    output logic             m_last
+    output logic             m_last,
+    output logic             cfg_error
 );
-    localparam int N_TILES = (C_LOGICAL + TILE - 1) / TILE;
-    localparam int TOTAL_H = IN_H * N_TILES;
-    localparam int ROW_W = $clog2(TOTAL_H+1);
-    localparam int COL_W = $clog2(IN_W+1);
-    localparam int CH_W = $clog2(TILE+1);
-    localparam int TOTAL_OUT = N_TILES * (IN_H/2) * (IN_W/2);
-    localparam int COUNT_W = $clog2(TOTAL_OUT+1);
+    localparam int H_W = $clog2(IN_H_MAX+1);
+    localparam int W_W = $clog2(IN_W_MAX+1);
+    localparam int CT_W = $clog2(C_TILE_MAX+1);
+    localparam int HALF_W_MAX = (IN_W_MAX+1)/2;
 
     generate
-        if (IN_H <= 0 || IN_W <= 0 || IN_H % 2 != 0 || IN_W % 2 != 0 ||
-            C_LOGICAL <= 0 || TILE != 8) begin : g_bad_geometry
+        if (IN_H_MAX < 2 || IN_W_MAX < 2 || C_TILE_MAX < 1 || TILE != 8) begin : g_bad_envelope
             illegal_pool2x2_parameters u_guard ();
         end
     endgenerate
 `ifndef SYNTHESIS
     initial begin
-        if (IN_H <= 0 || IN_W <= 0 || IN_H % 2 != 0 || IN_W % 2 != 0 ||
-            C_LOGICAL <= 0 || TILE != 8)
-            $fatal(1, "pool2x2: geometry requires positive even H/W and TILE=8");
+        if (IN_H_MAX < 2 || IN_W_MAX < 2 || C_TILE_MAX < 1 || TILE != 8)
+            $fatal(1, "pool2x2: envelope requires H/W >= 2, tiles >= 1, and TILE=8");
     end
 `endif
 
-    logic [ROW_W-1:0] rows_written;
-    logic frame_done, rd_en, rd_valid;
-    logic [ROW_W-1:0] rd_row;
-    logic [COL_W-1:0] rd_col;
-    logic [CH_W-1:0] rd_ch;
-    logic [7:0] rd_byte;
-    logic [ROW_W-1:0] pair_row;
-    logic [COL_W-1:0] out_col;
-    logic [CH_W-1:0] channel;
-    logic [1:0] quadrant;
-    logic signed [7:0] max_byte;
-    logic [TILE*8-1:0] word_reg;
-    logic [COUNT_W-1:0] out_count;
-    logic write_busy;
+    logic [H_W-1:0] cfg_in_h_q;
+    logic [W_W-1:0] cfg_in_w_q;
+    logic [CT_W-1:0] cfg_c_tiles_q;
+    logic cfg_loaded, cfg_valid, cfg_matches, frame_active;
+    logic [H_W-1:0] in_row;
+    logic [W_W-1:0] in_col;
+    logic [CT_W-1:0] in_tile;
+    logic [TILE*8-1:0] even_word;
+    logic [TILE*8-1:0] row_max [0:HALF_W_MAX-1];
+    logic [TILE*8-1:0] horizontal_max, pooled_word;
+    logic accept;
 
-    typedef enum logic [1:0] {WAIT_PAIR, ISSUE, CAPTURE, HOLD} state_t;
-    state_t state;
-
-    // The two rows belonging to the current output row remain resident until
-    // every output beat has handshaken. K_H=3 (not 2) is now a deliberate
-    // choice, no longer a workaround: it was originally picked to dodge a
-    // power-of-two truncation in line_buffer's K_H_VALUE, and that bug was
-    // fixed on 2026-10-09 ($clog2(K_H) -> $clog2(K_H+1)), so K_H=2 is
-    // viable. It is left at 3 because the saving is one buffered row
-    // (~224 bytes against 16 RAMB36) and dropping it would cost a full
-    // re-verification cycle for no measurable gain.
-    line_buffer #(
-        .K_H(3), .C_LOGICAL(TILE), .C_PHYS_STRIDE(TILE),
-        .IN_W(IN_W), .IN_H(TOTAL_H), .DATA_WIDTH(8)
-    ) u_rows (
-        .clk(clk), .rst_n(rst_n), .clear(1'b0),
-        .allow_input(rows_written < pair_row + ROW_W'(2)),
-        .resume_write(1'b1), .s_valid(s_valid), .s_ready(s_ready),
-        .s_data(s_data), .s_last(s_last), .write_busy(write_busy),
-        .rows_written(rows_written), .frame_done(frame_done),
-        .rd_en(rd_en), .rd_row(rd_row), .rd_col(rd_col), .rd_ch(rd_ch),
-        .rd_valid(rd_valid), .rd_byte(rd_byte)
+    function automatic logic [TILE*8-1:0] lane_max(
+        input logic [TILE*8-1:0] a,
+        input logic [TILE*8-1:0] b
     );
+        integer lane;
+        begin
+            for (lane=0; lane<TILE; lane=lane+1)
+                lane_max[lane*8 +: 8] =
+                    ($signed(a[lane*8 +: 8]) >= $signed(b[lane*8 +: 8]))
+                    ? a[lane*8 +: 8] : b[lane*8 +: 8];
+        end
+    endfunction
 
-    assign rd_en = state == ISSUE;
-    assign rd_row = pair_row + ROW_W'(quadrant[1]);
-    assign rd_col = COL_W'(2*out_col + quadrant[0]);
-    assign rd_ch = channel;
-    assign m_last = m_valid && out_count == COUNT_W'(TOTAL_OUT-1);
-
-    logic signed [7:0] selected;
-    logic [TILE*8-1:0] word_next;
     always_comb begin
-        selected = (quadrant == 0 || $signed(rd_byte) > max_byte)
-                 ? $signed(rd_byte) : max_byte;
-        word_next = word_reg;
-        word_next[channel*8 +: 8] = selected;
+        cfg_valid = (cfg_in_h != 0) && (cfg_in_w != 0) &&
+                    !cfg_in_h[0] && !cfg_in_w[0] &&
+                    (cfg_in_h <= IN_H_MAX) && (cfg_in_w <= IN_W_MAX) &&
+                    (cfg_c_tiles != 0) && (cfg_c_tiles <= C_TILE_MAX);
+        cfg_matches = (cfg_in_h_q == cfg_in_h) &&
+                      (cfg_in_w_q == cfg_in_w) &&
+                      (cfg_c_tiles_q == cfg_c_tiles);
+        horizontal_max = lane_max(even_word, s_data);
+        pooled_word = lane_max(row_max[in_col >> 1], horizontal_max);
     end
+
+    // A changed idle configuration is sampled for one cycle before ready.
+    // During a frame only the registered geometry participates in control.
+    assign s_ready = !cfg_error && cfg_loaded &&
+                     (frame_active || (cfg_valid && cfg_matches)) &&
+                     (frame_active || !m_valid) && (!m_valid || m_ready);
+    assign accept = s_valid && s_ready;
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            pair_row <= '0;
-            out_col <= '0;
-            channel <= '0;
-            quadrant <= '0;
-            max_byte <= '0;
-            word_reg <= '0;
-            m_data <= '0;
+            cfg_in_h_q <= '0;
+            cfg_in_w_q <= '0;
+            cfg_c_tiles_q <= '0;
+            cfg_loaded <= 1'b0;
+            cfg_error <= 1'b0;
+            frame_active <= 1'b0;
+            in_row <= '0;
+            in_col <= '0;
+            in_tile <= '0;
+            even_word <= '0;
             m_valid <= 1'b0;
-            out_count <= '0;
-            state <= WAIT_PAIR;
+            m_data <= '0;
+            m_last <= 1'b0;
         end else begin
-            case (state)
-                WAIT_PAIR: if (rows_written >= pair_row + ROW_W'(2) &&
-                               out_count < COUNT_W'(TOTAL_OUT)) begin
-                    channel <= '0;
-                    quadrant <= '0;
-                    state <= ISSUE;
+            if (!frame_active && !m_valid) begin
+                cfg_in_h_q <= cfg_in_h;
+                cfg_in_w_q <= cfg_in_w;
+                cfg_c_tiles_q <= cfg_c_tiles;
+                cfg_loaded <= 1'b1;
+                cfg_error <= !cfg_valid;
+            end
+
+            if (m_valid && m_ready) begin
+                m_valid <= 1'b0;
+                m_last <= 1'b0;
+            end
+
+            if (accept) begin
+                if (!frame_active) frame_active <= 1'b1;
+
+                if (!in_col[0]) begin
+                    even_word <= s_data;
+                end else if (!in_row[0]) begin
+                    row_max[in_col >> 1] <= horizontal_max;
+                end else begin
+                    m_data <= pooled_word;
+                    m_valid <= 1'b1;
+                    m_last <= (in_tile == cfg_c_tiles_q-1'b1) &&
+                              (in_row == cfg_in_h_q-1'b1) &&
+                              (in_col == cfg_in_w_q-1'b1);
                 end
-                ISSUE: state <= CAPTURE;
-                CAPTURE: if (rd_valid) begin
-                    max_byte <= selected;
-                    if (quadrant != 2'd3) begin
-                        quadrant <= quadrant + 1'b1;
-                        state <= ISSUE;
-                    end else begin
-                        word_reg <= word_next;
-                        quadrant <= '0;
-                        if (channel != CH_W'(TILE-1)) begin
-                            channel <= channel + 1'b1;
-                            state <= ISSUE;
+
+                if (in_col == cfg_in_w_q-1'b1) begin
+                    in_col <= '0;
+                    if (in_row == cfg_in_h_q-1'b1) begin
+                        in_row <= '0;
+                        if (in_tile == cfg_c_tiles_q-1'b1) begin
+                            in_tile <= '0;
+                            frame_active <= 1'b0;
                         end else begin
-                            m_data <= word_next;
-                            m_valid <= 1'b1;
-                            state <= HOLD;
+                            in_tile <= in_tile + 1'b1;
                         end
-                    end
-                end
-                HOLD: if (m_valid && m_ready) begin
-                    m_valid <= 1'b0;
-                    out_count <= out_count + 1'b1;
-                    if (out_col == COL_W'(IN_W/2-1)) begin
-                        out_col <= '0;
-                        pair_row <= pair_row + ROW_W'(2);
                     end else begin
-                        out_col <= out_col + 1'b1;
+                        in_row <= in_row + 1'b1;
                     end
-                    state <= WAIT_PAIR;
+                end else begin
+                    in_col <= in_col + 1'b1;
                 end
-                default: state <= WAIT_PAIR;
-            endcase
+            end
         end
     end
+
+    // Fixed eight-byte beats have no TKEEP; geometry is the byte-count
+    // contract. Keep s_last in the interface for the DMA wrapper.
+    logic unused_s_last;
+    always_comb unused_s_last = s_last;
 endmodule
