@@ -159,7 +159,9 @@ module accel_top #(
     assign hw_error_set[4] = |((error_flags & ~flags_seen) & 8'h48);
     assign hw_error_set[5] = |((error_flags & ~flags_seen) & 8'h10);
     assign hw_error_set[6] = |((error_flags & ~flags_seen) & 8'h27);
-    assign hw_error_set[7] = start && !geometry_ok;
+    // conv1_top error_flags[7]: window geometry or cfg_k_len mismatch.
+    assign hw_error_set[7] = (start && !geometry_ok) ||
+                             |((error_flags & ~flags_seen) & 8'h80);
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
@@ -272,7 +274,9 @@ module accel_top #(
     );
 
     conv1_top #(
-        .ROWS(ROWS), .K_MAX(K_MAX), .TILE_MAX(TILE_MAX), .W_DEPTH(W_DEPTH)
+        .ROWS(ROWS), .IN_H_MAX(IN_H_MAX), .IN_W_MAX(IN_W_MAX), .C_MAX(C_MAX),
+        .ROW_BYTES_MAX(ROW_BYTES_MAX), .K_H_MAX(K_H_MAX), .K_W_MAX(K_W_MAX),
+        .PAD_MAX(PAD_MAX), .K_MAX(K_MAX), .TILE_MAX(TILE_MAX), .W_DEPTH(W_DEPTH)
     ) u_conv1 (
         .clk(clk), .rst_n(rst_n), .s_valid(s_valid), .s_ready(s_ready),
         .s_data(s_data), .s_last(s_last),
@@ -280,6 +284,9 @@ module accel_top #(
         .w_wr_data(w_wr_data), .frame_start(frame_start),
         .cfg_active_rows(cfg_active_rows), .cfg_k_len(cfg_k_len[K_W-1:0]),
         .cfg_tile_idx(cfg_tile_idx[TILE_W-1:0]),
+        .cfg_in_h(cfg_in_h), .cfg_in_w(cfg_in_w), .cfg_c_in(cfg_c_in),
+        .cfg_c_phys(cfg_c_phys), .cfg_kh(cfg_kh), .cfg_kw(cfg_kw),
+        .cfg_pad(cfg_pad), .cfg_w_base(cfg_w_base),
         .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
         .cfg_shift_n(cfg_shift_n), .cfg_relu(cfg_relu), .cfg_bypass(cfg_bypass),
         .m_valid(m_valid), .m_ready(m_ready), .m_y_flat(m_y_flat),
@@ -289,7 +296,4 @@ module accel_top #(
         .error_flags(error_flags), .lockstep_error(lockstep_error),
         .drain_stall(drain_stall), .engine_cycle_count(cycle_count_raw)
     );
-
-    // INTEGRATION: connect to conv1_top cfg_in_h/cfg_in_w/cfg_c_in/
-    // cfg_c_phys/cfg_kh/cfg_kw/cfg_pad/cfg_w_base after lane G is merged.
 endmodule

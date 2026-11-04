@@ -286,8 +286,6 @@ module conv1_top #(
 
     assign error_flags = {ctrl_error_flags[7] | geom_error, ctrl_error_flags[6:0]};
 
-    // cfg_w_base -> u_weights.base: wired at integration (lane R adds the port)
-
     weight_feeder #(
         .ROWS       (ROWS),
         .DATA_WIDTH (DATA_WIDTH),
@@ -302,6 +300,7 @@ module conv1_top #(
         .wr_addr      (w_wr_addr),
         .wr_data      (w_wr_data),
         .start        (wf_start),
+        .base         (cfg_w_base),
         .ready        (wf_ready),
         .tile_idx     (wf_tile_idx),
         .k_len        (wf_k_len),

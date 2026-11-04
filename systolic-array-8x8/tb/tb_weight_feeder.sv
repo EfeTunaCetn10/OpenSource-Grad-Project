@@ -118,12 +118,15 @@ module tb_weight_feeder;
         input integer len
     );
         begin
-            while (!ready)
-                @(negedge clk);
+            // Command inputs first; the feeder raises ready only after its
+            // precomputed start address has settled on them.
             @(negedge clk);
             base     = base_addr[ADDR_W-1:0];
             tile_idx = tile[TILE_W-1:0];
             k_len    = len[K_W-1:0];
+            @(negedge clk);
+            while (!ready)
+                @(negedge clk);
             start    = 1'b1;
             @(posedge clk);
             @(negedge clk);
@@ -420,11 +423,12 @@ module tb_weight_feeder_init;
         // Single tile, tile_idx=0: addr(bank=r, tile=0, k) = k, i.e. bank r
         // address k holds golden[r][k] directly (ADR-011 addr formula with
         // t=0).
-        while (!ready)
-            @(negedge clk);
         @(negedge clk);
         tile_idx = '0;
         k_len    = K_LEN[K_W-1:0];
+        @(negedge clk);
+        while (!ready)
+            @(negedge clk);
         start    = 1'b1;
         @(posedge clk);
         @(negedge clk);
