@@ -7,8 +7,8 @@ module tb_act_buffer;
     logic clk=0;
     always #5 clk=~clk;
     logic rst_n=0;
-    logic [4:0] cfg_out_h=28, cfg_out_w=28;
-    logic [1:0] cfg_c_tile=0;
+    logic [5:0] cfg_out_h=28, cfg_out_w=28;
+    logic [2:0] cfg_c_tile=0;
     logic in_valid=0, in_ready, in_last=0;
     logic [63:0] in_y_flat=0;
     logic [7:0] in_lane_valid=8'h3f;
@@ -28,7 +28,7 @@ module tb_act_buffer;
         $fatal(1,"tb_act_buffer timeout");
     end
 
-    act_buffer dut (.*);
+    act_buffer #(.DEPTH(784)) dut (.*);
 
     // A good accepted beat must issue exactly one write, to the active bank.
     // These counters have a plain procedural driver (XSim rejects a

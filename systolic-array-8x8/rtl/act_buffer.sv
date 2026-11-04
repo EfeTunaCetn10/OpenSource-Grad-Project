@@ -4,10 +4,10 @@
 // sampled during the two setup cycles before a frame; hold it through in_last.
 module act_buffer #(
     parameter int LANES = 8,
-    parameter int OUT_H_MAX = 28,
-    parameter int OUT_W_MAX = 28,
-    parameter int C_TILE_MAX = 2,
-    parameter int DEPTH = 784,
+    parameter int OUT_H_MAX = 48,
+    parameter int OUT_W_MAX = 48,
+    parameter int C_TILE_MAX = 4,
+    parameter int DEPTH = 4608,
     parameter int COL_W = 4
 ) (
     input  logic clk, rst_n,
