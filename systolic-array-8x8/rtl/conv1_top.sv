@@ -17,8 +17,15 @@
 // addr = (((c>>3)*H + h)*W + w)*8 + (c&7)); the address generator and the
 // ping-pong swap are still unwritten, so the requantized stream leaves this
 // block directly.  The C_LOGICAL/C_PHYS_STRIDE split that layout needs IS now
-// in window_gen/line_buffer and is carried on this top's parameter list, so a
-// conv2-geometry instantiation (C_IN=6, C_PHYS_STRIDE=8) is expressible here.
+// in window_gen/line_buffer and is carried on this top's cfg ports, so a
+// conv2-geometry layer (c_in=6, c_phys=8) is expressible here.
+//
+// Runtime geometry (faz3-param).  One instance runs every layer: in_h, in_w,
+// c_in, c_phys, kh, kw and pad are quasi-static cfg_* inputs bounded by the
+// *_MAX envelope parameters, changed only between frames.  An out-of-envelope
+// geometry, or a cfg_k_len that disagrees with the generator's own latched
+// c_in*kh*kw, sets error_flags[7] (reserved-zero in layer_ctrl).  Like the
+// layer_ctrl bits it is cleared by frame_start and set while busy.
 //
 // Every submodule instantiated here was previously verified only in isolation.
 // This is the first time window_gen, compute_engine and requant_array share one
@@ -31,22 +38,15 @@ module conv1_top #(
     parameter int ACC_WIDTH  = 32,
     parameter int M0_W       = 18,
 
-    // Layer geometry (ADR-002 conv1).  KERN_H/KERN_W avoid colliding with the
-    // k_len port width below.
-    parameter int KERN_H     = 5,
-    parameter int KERN_W     = 5,
-    // C_IN is the LOGICAL channel count: it alone sets the reduction length
-    // K = C_IN*KERN_H*KERN_W, which is what the weight banks and cfg_k_len
-    // are indexed by.  C_PHYS_STRIDE is the byte distance between adjacent
-    // columns of the stored frame (ADR-018 Decision 2, padded tile-major).
-    // Conv1 input is 3/3 so the default keeps them equal; a conv2-geometry
-    // instantiation passes 6/8 and only line_buffer's addressing changes.
-    parameter int C_IN         = 3,
-    parameter int C_PHYS_STRIDE = C_IN,
-    parameter int IN_H       = 32,
-    parameter int IN_W       = 32,
-    parameter int STRIDE     = 1,
-    parameter int PAD        = 0,
+    // Geometry envelope.  The actual layer geometry is on the cfg_* ports;
+    // these only size the hardware.  Stride is always 1.
+    parameter int IN_H_MAX      = 48,
+    parameter int IN_W_MAX      = 48,
+    parameter int C_MAX         = 511,
+    parameter int ROW_BYTES_MAX = 512,    // max in_w * c_phys
+    parameter int K_H_MAX       = 5,
+    parameter int K_W_MAX       = 5,
+    parameter int PAD_MAX       = 2,
 
     parameter int K_MAX      = 1024,
     parameter int TILE_MAX   = 16,
@@ -91,6 +91,20 @@ module conv1_top #(
     input  logic [K_W-1:0]              cfg_k_len,
     input  logic [TILE_W-1:0]           cfg_tile_idx,
 
+    // Layer geometry.  cfg_c_in is the LOGICAL channel count: it alone sets
+    // the reduction length K = c_in*kh*kw, which is what the weight banks and
+    // cfg_k_len are indexed by.  cfg_c_phys is the byte distance between
+    // adjacent columns of the stored frame (ADR-018 Decision 2, padded
+    // tile-major); conv1 input is 3/3, conv2 input 6/8.
+    input  logic [$clog2(IN_H_MAX+1)-1:0] cfg_in_h,
+    input  logic [$clog2(IN_W_MAX+1)-1:0] cfg_in_w,
+    input  logic [8:0]                  cfg_c_in,     // logical channels
+    input  logic [8:0]                  cfg_c_phys,   // physical channel stride in memory/stream
+    input  logic [2:0]                  cfg_kh,
+    input  logic [2:0]                  cfg_kw,
+    input  logic [1:0]                  cfg_pad,
+    input  logic [$clog2(W_DEPTH)-1:0]  cfg_w_base,   // weight bank base address
+
     // Per-output-channel requant configuration (ADR-014).  Lane r is output
     // channel cfg_tile_idx*ROWS + r, the same indexing the weight banks use.
     input  logic signed [ACC_WIDTH-1:0] cfg_bias_q  [0:ROWS-1],
@@ -128,6 +142,13 @@ module conv1_top #(
     logic        win_tile_start;
     logic        win_tile_last;
     logic        win_done;
+    logic        win_cfg_error;
+    logic [K_W-1:0] win_k_len;
+
+    // Geometry error -> error_flags[7]; see the header.
+    logic [7:0]  ctrl_error_flags;
+    logic        geom_bad;
+    logic        geom_error;
 
     // layer_ctrl -> compute_engine
     logic             eng_start;
@@ -168,18 +189,27 @@ module conv1_top #(
     assign window_done = win_done;
 
     window_gen #(
-        .K_H           (KERN_H),
-        .K_W           (KERN_W),
-        .C_LOGICAL     (C_IN),
-        .C_PHYS_STRIDE (C_PHYS_STRIDE),
-        .IN_W          (IN_W),
-        .IN_H          (IN_H),
-        .STRIDE        (STRIDE),
-        .PAD           (PAD),
+        .IN_H_MAX      (IN_H_MAX),
+        .IN_W_MAX      (IN_W_MAX),
+        .C_MAX         (C_MAX),
+        .ROW_BYTES_MAX (ROW_BYTES_MAX),
+        .K_H_MAX       (K_H_MAX),
+        .K_W_MAX       (K_W_MAX),
+        .PAD_MAX       (PAD_MAX),
+        .K_MAX         (K_MAX),
         .DATA_WIDTH    (DATA_WIDTH)
     ) u_window (
         .clk           (clk),
         .rst_n         (rst_n),
+        .cfg_in_h      (cfg_in_h),
+        .cfg_in_w      (cfg_in_w),
+        .cfg_c_in      (cfg_c_in),
+        .cfg_c_phys    (cfg_c_phys),
+        .cfg_kh        (cfg_kh),
+        .cfg_kw        (cfg_kw),
+        .cfg_pad       (cfg_pad),
+        .cfg_error     (win_cfg_error),
+        .k_len         (win_k_len),
         .restart       (restart),
         .restart_error (restart_error),
         .s_valid       (s_valid),
@@ -237,8 +267,26 @@ module conv1_top #(
         .wf_done              (wf_done),
         .wf_cfg_error         (wf_cfg_error),
         .tile_count           (tile_count),
-        .error_flags          (error_flags)
+        .error_flags          (ctrl_error_flags)
     );
+
+    // cfg_k_len stays an input (the driver writes c_in*kh*kw); it must agree
+    // with the generator's registered product, or the engine would reduce a
+    // different number of beats than the generator emits per tile.
+    assign geom_bad = win_cfg_error || (cfg_k_len != win_k_len);
+
+    always_ff @(posedge clk) begin
+        if (!rst_n)
+            geom_error <= 1'b0;
+        else if (frame_start)
+            geom_error <= 1'b0;
+        else if (busy && geom_bad)
+            geom_error <= 1'b1;
+    end
+
+    assign error_flags = {ctrl_error_flags[7] | geom_error, ctrl_error_flags[6:0]};
+
+    // cfg_w_base -> u_weights.base: wired at integration (lane R adds the port)
 
     weight_feeder #(
         .ROWS       (ROWS),
@@ -332,24 +380,14 @@ module conv1_top #(
 
 `ifndef SYNTHESIS
     // The geometry the command ports describe must be the geometry the window
-    // generator was parameterized with; a mismatch produces a correctly shaped
-    // tensor full of wrong values, which is the failure class ADR-018 flags.
-    initial begin
-        if (C_IN * KERN_H * KERN_W > K_MAX)
-            $fatal(1, "conv1_top: K=%0d exceeds K_MAX=%0d",
-                   C_IN * KERN_H * KERN_W, K_MAX);
-        if (C_IN * KERN_H * KERN_W > W_DEPTH)
-            $fatal(1, "conv1_top: one tile of weights does not fit a bank");
-    end
-
-    // k_len must match the generator's own reduction length, otherwise the
-    // engine would be told to reduce a different number of beats than the
-    // generator emits per tile and the tile boundary would slide.
+    // generator latched; a mismatch produces a correctly shaped tensor full of
+    // wrong values, which is the failure class ADR-018 flags.  The hardware
+    // flag is error_flags[7]; this is the simulation-side message.
     a_k_len_matches_geometry: assert property (
         @(posedge clk) disable iff (!rst_n)
-        frame_start |-> (cfg_k_len == K_W'(C_IN * KERN_H * KERN_W))
-    ) else $error("conv1_top: cfg_k_len %0d != C_IN*KERN_H*KERN_W %0d",
-                  cfg_k_len, C_IN * KERN_H * KERN_W);
+        busy |-> (cfg_k_len == win_k_len)
+    ) else $error("conv1_top: cfg_k_len %0d != latched c_in*kh*kw %0d",
+                  cfg_k_len, win_k_len);
 
     a_active_rows_in_range: assert property (
         @(posedge clk) disable iff (!rst_n)

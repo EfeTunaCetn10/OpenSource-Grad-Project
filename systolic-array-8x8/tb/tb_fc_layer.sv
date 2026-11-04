@@ -44,16 +44,20 @@ module tb_fc_layer;
     logic [31:0] tile_count, engine_cycle_count;
     logic [7:0] error_flags;
 
-    // K_MAX is intentionally left at conv1_top's 1024 default.
-    conv1_top #(.C_IN(K), .KERN_H(1), .KERN_W(1), .IN_H(1),
-                .IN_W(1)) dut (
+    // K_MAX is intentionally left at conv1_top's 1024 default, and the
+    // geometry envelope at its defaults; FC1 is a 1x1 convolution over K
+    // channels, driven through the runtime cfg_* ports.
+    conv1_top dut (
         .clk(clk), .rst_n(rst_n), .s_valid(s_valid), .s_ready(s_ready),
         .s_data(s_data), .s_last(s_last), .restart(restart),
         .restart_error(restart_error), .w_wr_en(w_wr_en),
         .w_wr_bank(w_wr_bank), .w_wr_addr(w_wr_addr),
         .w_wr_data(w_wr_data), .frame_start(frame_start),
         .cfg_active_rows(cfg_active_rows), .cfg_k_len(cfg_k_len),
-        .cfg_tile_idx(cfg_tile_idx), .cfg_bias_q(cfg_bias_q),
+        .cfg_tile_idx(cfg_tile_idx),
+        .cfg_in_h(6'd1), .cfg_in_w(6'd1), .cfg_c_in(9'(K)), .cfg_c_phys(9'(K)),
+        .cfg_kh(3'd1), .cfg_kw(3'd1), .cfg_pad(2'd0), .cfg_w_base('0),
+        .cfg_bias_q(cfg_bias_q),
         .cfg_m0(cfg_m0), .cfg_shift_n(cfg_shift_n), .cfg_relu(cfg_relu),
         .cfg_bypass(1'b0), .m_valid(m_valid), .m_ready(m_ready),
         .m_y_flat(m_y_flat), .m_lane_valid(m_lane_valid),

@@ -1,9 +1,9 @@
 `timescale 1ns/1ps
 
-// Parametric valid-convolution window generator.
+// Runtime-geometry convolution window generator (stride 1).
 //
 // The output order is output-row, eight-column tile, then
-//   k = ci*(K_H*K_W) + kh*K_W + kw.
+//   k = ci*(kh*kw) + kh_i*kw + kw_i.
 // Each output beat contains eight positions at the same k, exactly matching
 // compute_engine's B-top activation edge.  The final tile of a row reports
 // only its real columns in m_active_cols and zeroes all inactive lanes.
@@ -12,38 +12,72 @@
 // each registered result on the following cycle, then presents one 64-bit
 // activation beat.  The extra response cycle is contained entirely here.
 //
-// PAD is retained as a parameter and zero padding is generated for coordinates
-// outside the input frame.  The Stage-1 contract is PAD=0; a production
-// non-zero-padding design would additionally need an explicit border policy
-// in the DMA/frame contract and verification vectors.
+// Runtime geometry (faz3-param).  in_h, in_w, c_in, c_phys, kh, kw and pad
+// are quasi-static cfg_* inputs bounded by the *_MAX envelope.  They are
+// latched whenever the generator is idle (reset, ST_DONE, or ST_INPUT before
+// the frame's first beat) and frozen for the rest of the frame.  Derived
+// products (row bytes = in_w*c_phys, k_len = c_in*kh*kw) are formed once at
+// that latch; the per-beat and per-byte path only adds, compares and wraps:
+//
+//   * the ring slot of the window's top row (base_slot) and of the current
+//     kernel row (kh_slot) are wrap counters, not `row % K_H`;
+//   * the physical byte offset of the current lane is an accumulator that
+//     steps by c_phys per lane/kernel column, by one per channel and by
+//     8*c_phys per tile, not `col * c_phys`.  It is kept modulo
+//     2^BYTE_W: a negative or past-the-row value only ever belongs to a
+//     padding lane, which is never read, and every in-frame value is below
+//     ROW_BYTES_MAX, so the wrap is exact where it matters.
+//
+// Zero padding (pad <= PAD_MAX) is generated for every coordinate outside the
+// frame -- top, left, right and bottom -- and is never received on the
+// stream.  The bottom padding rows are virtual: a window whose bottom row is
+// beyond the frame waits only for the last real row (Person A's fix, ported
+// from integration/ml-rtl-2026-10-09).
+//
+// An out-of-envelope configuration raises cfg_error (a level, valid one cycle
+// after the latch) and holds the generator idle with s_ready low instead of
+// running a frame with nonsensical counters.  See the cfg_error block below
+// for the exact conditions.
 //
 // C_LOGICAL vs C_PHYS_STRIDE -- ADR-018 Decision 2, "Bedeli" item 1.  The
-// reduction length K_LEN is computed from C_LOGICAL ONLY.  Computing it from
+// reduction length k_len is computed from cfg_c_in ONLY.  Computing it from
 // the physical stride would give conv2 K = 200 instead of 150: the output
 // shape would stay correct, the values would go quietly wrong and no flag
 // would be raised.  That is the failure class this split exists to make
-// impossible.  The physical stride is used only by line_buffer's addressing.
+// impossible.  The physical stride is used only for byte addressing.
 //
 // Frame lifecycle.  ST_DONE used to be terminal, so a second frame needed the
 // global reset; conv2's two output-channel tiles cannot work that way.  The
 // `restart` input returns the generator to ST_INPUT so a FRESH input stream
 // can be accepted.  It is explicitly NOT a replay: line_buffer holds a ring of
-// K_H rows, not the whole frame, so there is nothing in it to replay from.  A
-// second pass over the same data means re-streaming it from the intermediate
-// activation buffer.
+// K_H_MAX rows, not the whole frame, so there is nothing in it to replay from.
+// A second pass over the same data means re-streaming it from the
+// intermediate activation buffer.
 module window_gen #(
-    parameter int K_H           = 5,
-    parameter int K_W           = 5,
-    parameter int C_LOGICAL     = 3,
-    parameter int C_PHYS_STRIDE = C_LOGICAL,
-    parameter int IN_W          = 32,
-    parameter int IN_H          = 32,
-    parameter int STRIDE        = 1,
-    parameter int PAD           = 0,
+    parameter int IN_H_MAX      = 48,
+    parameter int IN_W_MAX      = 48,
+    parameter int C_MAX         = 511,
+    parameter int ROW_BYTES_MAX = 512,
+    parameter int K_H_MAX       = 5,
+    parameter int K_W_MAX       = 5,
+    parameter int PAD_MAX       = 2,
+    parameter int K_MAX         = 1024,
     parameter int DATA_WIDTH    = 8
 ) (
     input  logic        clk,
     input  logic        rst_n,
+
+    // Quasi-static layer geometry; change only while idle.
+    input  logic [$clog2(IN_H_MAX+1)-1:0] cfg_in_h,
+    input  logic [$clog2(IN_W_MAX+1)-1:0] cfg_in_w,
+    input  logic [8:0]                    cfg_c_in,     // logical channels
+    input  logic [8:0]                    cfg_c_phys,   // physical channel stride
+    input  logic [2:0]                    cfg_kh,
+    input  logic [2:0]                    cfg_kw,
+    input  logic [1:0]                    cfg_pad,
+    output logic                          cfg_error,
+    // The latched c_in*kh*kw, for the caller to cross-check its own k_len.
+    output logic [$clog2(K_MAX+1)-1:0]    k_len,
 
     // Single-cycle frame restart.  Accepted only in ST_DONE, or while the
     // generator is still idle after reset; a restart that arrives mid-frame is
@@ -68,53 +102,33 @@ module window_gen #(
     output logic        m_tile_last,
     output logic        done
 );
-    localparam int OUT_W = ((IN_W + 2*PAD - K_W) / STRIDE) + 1;
-    localparam int OUT_H = ((IN_H + 2*PAD - K_H) / STRIDE) + 1;
-    // Logical, never physical.  See the C_LOGICAL note in the header.
-    localparam int K_LEN = C_LOGICAL * K_H * K_W;
+    // pad < kh and pad < kw are enforced (cfg_error), so an output dimension
+    // never exceeds the input dimension by more than PAD_MAX.
+    localparam int OUT_H_MAX = IN_H_MAX + PAD_MAX;
+    localparam int OUT_W_MAX = IN_W_MAX + PAD_MAX;
 
-    localparam int ROW_W       = (IN_H < 1) ? 1 : $clog2(IN_H+1);
-    localparam int COL_W       = (IN_W < 1) ? 1 : $clog2(IN_W+1);
-    localparam int OUT_Y_W     = (OUT_H <= 1) ? 1 : $clog2(OUT_H);
-    localparam int TILE_X_W    = (OUT_W <= 1) ? 1 : $clog2(OUT_W);
-    localparam int K_COUNT_W   = (K_LEN <= 1) ? 1 : $clog2(K_LEN);
-    localparam int CI_W        = (C_LOGICAL <= 1) ? 1 : $clog2(C_LOGICAL);
-    localparam int KH_W        = (K_H <= 1) ? 1 : $clog2(K_H);
-    localparam int KW_W        = (K_W <= 1) ? 1 : $clog2(K_W);
-    localparam int CH_W        = (C_LOGICAL < 1) ? 1 : $clog2(C_LOGICAL+1);
-    localparam int ROW_COORD_W = $clog2(IN_H + 2*PAD + K_H + STRIDE + 2) + 1;
-    localparam int COL_COORD_W = $clog2(IN_W + 2*PAD + K_W + 8*STRIDE + 2) + 1;
+    // Every width that holds a VALUE (not just an index) is $clog2(MAX+1):
+    // $clog2(N) cannot represent N itself, which is the RING_W / TILE_X_W bug
+    // class.  TILE_X_W is Person A's fix (a): remaining_cols must hold out_w.
+    localparam int ROW_W       = (IN_H_MAX < 1) ? 1 : $clog2(IN_H_MAX+1);
+    localparam int COL_W       = (IN_W_MAX < 1) ? 1 : $clog2(IN_W_MAX+1);
+    localparam int OUT_Y_W     = $clog2(OUT_H_MAX+1);
+    localparam int TILE_X_W    = $clog2(OUT_W_MAX+1);
+    localparam int K_COUNT_W   = $clog2(K_MAX+1);
+    localparam int CI_W        = $clog2(C_MAX+1);
+    localparam int KH_W        = $clog2(K_H_MAX+1);
+    localparam int KW_W        = $clog2(K_W_MAX+1);
+    localparam int RING_W      = (K_H_MAX <= 1) ? 1 : $clog2(K_H_MAX+1);
+    localparam int BYTE_W      = $clog2(ROW_BYTES_MAX+1);
+    localparam int ROW_COORD_W = $clog2(IN_H_MAX + 2*PAD_MAX + K_H_MAX + 3) + 1;
+    localparam int COL_COORD_W = $clog2(IN_W_MAX + 2*PAD_MAX + K_W_MAX + 8 + 2) + 1;
+    // Full-width products, so an out-of-envelope value is seen, not truncated.
+    localparam int ROW_BYTES_FULL_W = COL_W + 9;
+    localparam int K_LEN_FULL_W     = 9 + 3 + 3;
 
-    localparam logic [OUT_Y_W-1:0]   LAST_OUT_Y  = OUT_H - 1;
-    localparam logic [TILE_X_W-1:0]  OUT_W_VALUE = OUT_W;
-    localparam logic [K_COUNT_W-1:0] LAST_K       = K_LEN - 1;
-    localparam logic [CI_W-1:0]      LAST_CI      = C_LOGICAL - 1;
-    localparam logic [KH_W-1:0]      LAST_KH      = K_H - 1;
-    localparam logic [KW_W-1:0]      LAST_KW      = K_W - 1;
+    localparam logic [RING_W-1:0] LAST_RING_SLOT = K_H_MAX - 1;
     localparam logic signed [ROW_COORD_W-1:0] NEG_ONE = -1;
-    localparam logic signed [ROW_COORD_W-1:0] ROW_STRIDE = STRIDE;
-    localparam logic signed [ROW_COORD_W-1:0] KH_OFFSET = K_H - 1;
-    localparam logic signed [COL_COORD_W-1:0] COL_STRIDE = STRIDE;
-    localparam logic signed [COL_COORD_W-1:0] TILE_SOURCE_STEP = 8*STRIDE;
-
-    // Same guard as line_buffer, repeated here so a wrong parameterisation
-    // fails at the boundary it was written at and not one level down.  The
-    // generate half is the synthesis-time check: an illegal parameterisation
-    // instantiates a module that does not exist, which Vivado synthesis and
-    // XSim elaboration both report as a hard error.  A legal one elaborates
-    // nothing at all, so this costs no logic.
-    generate
-        if (C_PHYS_STRIDE < C_LOGICAL) begin : g_bad_stride
-            illegal_parameters_C_PHYS_STRIDE_below_C_LOGICAL u_guard ();
-        end
-    endgenerate
-`ifndef SYNTHESIS
-    initial begin
-        if (C_PHYS_STRIDE < C_LOGICAL)
-            $fatal(1, "window_gen: C_PHYS_STRIDE=%0d is below C_LOGICAL=%0d",
-                   C_PHYS_STRIDE, C_LOGICAL);
-    end
-`endif
+    localparam logic signed [COL_COORD_W-1:0] TILE_SOURCE_STEP = 8;
 
     typedef enum logic [2:0] {ST_INPUT, ST_READ, ST_OUTPUT, ST_DONE} state_t;
     state_t state;
@@ -127,6 +141,112 @@ module window_gen #(
     logic restart_ok;
     logic restart_bad;
 
+    // ------------------------------------------------------------------
+    // Geometry latch.  Stage 1 samples the ports (and forms the two
+    // products) while idle; stage 2 re-derives everything else from stage 1
+    // every cycle.  Stage 1 is frozen for the whole frame, so stage 2 is too.
+    // ------------------------------------------------------------------
+    logic cfg_load;
+    logic [ROW_W-1:0]            in_h_q;
+    logic [COL_W-1:0]            in_w_q;
+    logic [8:0]                  c_in_q;
+    logic [8:0]                  c_phys_q;
+    logic [2:0]                  kh_q;
+    logic [2:0]                  kw_q;
+    logic [1:0]                  pad_q;
+    logic [ROW_BYTES_FULL_W-1:0] row_bytes_full_q;
+    logic [K_LEN_FULL_W-1:0]     k_len_full_q;
+
+    logic [KH_W-1:0]      last_kh_q;
+    logic [KW_W-1:0]      last_kw_q;
+    logic [CI_W-1:0]      last_ci_q;
+    logic [K_COUNT_W-1:0] last_k_q;
+    logic [OUT_Y_W-1:0]   last_out_y_q;
+    logic [TILE_X_W-1:0]  out_w_q;
+    logic [BYTE_W-1:0]    pad_byte_q;     // -(pad*c_phys) mod 2^BYTE_W
+    logic [BYTE_W-1:0]    c_phys_step;
+    logic [BYTE_W-1:0]    c_phys_tile_step;
+    logic signed [ROW_COORD_W-1:0] in_h_coord;
+    logic signed [COL_COORD_W-1:0] in_w_coord;
+    logic signed [ROW_COORD_W-1:0] kh_offset;
+    logic signed [ROW_COORD_W-1:0] pad_row_init;
+    logic signed [COL_COORD_W-1:0] pad_col_init;
+    logic [RING_W-1:0]             init_slot;
+
+    assign cfg_load = !rst_n || (state == ST_DONE) || restart_idle;
+
+    always_ff @(posedge clk) begin
+        if (cfg_load) begin
+            in_h_q           <= cfg_in_h;
+            in_w_q           <= cfg_in_w;
+            c_in_q           <= cfg_c_in;
+            c_phys_q         <= cfg_c_phys;
+            kh_q             <= cfg_kh;
+            kw_q             <= cfg_kw;
+            pad_q            <= cfg_pad;
+            // The only runtime multiplies in the module, and they are on the
+            // latch, not on the beat path.
+            row_bytes_full_q <= cfg_in_w * cfg_c_phys;
+            k_len_full_q     <= cfg_c_in * (cfg_kh * cfg_kw);
+        end
+    end
+
+    always_ff @(posedge clk) begin
+        last_kh_q    <= KH_W'(kh_q) - 1'b1;
+        last_kw_q    <= KW_W'(kw_q) - 1'b1;
+        last_ci_q    <= CI_W'(c_in_q) - 1'b1;
+        last_k_q     <= K_COUNT_W'(k_len_full_q) - 1'b1;
+        last_out_y_q <= OUT_Y_W'(in_h_q) + OUT_Y_W'({pad_q, 1'b0}) - OUT_Y_W'(kh_q);
+        out_w_q      <= TILE_X_W'(in_w_q) + TILE_X_W'({pad_q, 1'b0}) - TILE_X_W'(kw_q) + 1'b1;
+        case (pad_q)
+            2'd0:    pad_byte_q <= '0;
+            2'd1:    pad_byte_q <= -c_phys_step;
+            default: pad_byte_q <= -(c_phys_step << 1);
+        endcase
+
+        // Envelope check.  Every condition the datapath relies on is listed;
+        // anything else is a legal geometry.
+        cfg_error <= (in_h_q == 0) || (in_h_q > IN_H_MAX) ||
+                     (in_w_q == 0) || (in_w_q > IN_W_MAX) ||
+                     (c_in_q == 0) || (c_in_q > C_MAX) || (c_phys_q > C_MAX) ||
+                     (c_phys_q < c_in_q) ||
+                     (kh_q == 0) || (kh_q > K_H_MAX) ||
+                     (kw_q == 0) || (kw_q > K_W_MAX) ||
+                     (pad_q > PAD_MAX) || (pad_q >= kh_q) || (pad_q >= kw_q) ||
+                     ((in_h_q + 2*pad_q) < kh_q) || ((in_w_q + 2*pad_q) < kw_q) ||
+                     (row_bytes_full_q > ROW_BYTES_MAX) ||
+                     (k_len_full_q > K_MAX);
+    end
+
+    always_comb begin
+        c_phys_step      = BYTE_W'(c_phys_q);
+        c_phys_tile_step = c_phys_step << 3;
+        k_len            = K_COUNT_W'(k_len_full_q);
+        in_h_coord = '0;
+        in_h_coord[ROW_W-1:0] = in_h_q;
+        in_w_coord = '0;
+        in_w_coord[COL_W-1:0] = in_w_q;
+        kh_offset = '0;
+        kh_offset[KH_W-1:0] = last_kh_q;
+        // The frame origin follows the PORT, not stage 1: out_base_row and
+        // base_slot are reloaded from it while idle, in the same cycles stage 1
+        // samples, so the two can never disagree when the frame starts.
+        pad_row_init = -$signed({1'b0, cfg_pad});
+        pad_col_init = -$signed({1'b0, pad_q});
+        init_slot    = (cfg_pad == 2'd0) ? '0 : RING_W'(K_H_MAX - cfg_pad);
+    end
+
+    // Incremental addressing state (see the header).  base_slot is the ring
+    // slot of out_base_row, kh_slot the slot of out_base_row + kh_count.
+    // tile_byte is the byte offset of (tile_base_col, ci 0), ci_byte adds the
+    // channel, kw_byte the kernel column and lane_byte the gather lane.
+    logic [RING_W-1:0]    base_slot;
+    logic [RING_W-1:0]    kh_slot;
+    logic [BYTE_W-1:0]    tile_byte;
+    logic [BYTE_W-1:0]    ci_byte;
+    logic [BYTE_W-1:0]    kw_byte;
+    logic [BYTE_W-1:0]    lane_byte;
+
     logic allow_input;
     logic resume_write;
     logic lb_clear;
@@ -135,37 +255,35 @@ module window_gen #(
     logic lb_frame_done;
     logic lb_rd_en;
     logic [ROW_W-1:0] lb_rd_row;
-    logic [COL_W-1:0] lb_rd_col;
-    logic [CH_W-1:0] lb_rd_ch;
     logic lb_rd_valid;
     logic [DATA_WIDTH-1:0] lb_rd_byte;
 
     line_buffer #(
-        .K_H           (K_H),
-        .C_LOGICAL     (C_LOGICAL),
-        .C_PHYS_STRIDE (C_PHYS_STRIDE),
-        .IN_W          (IN_W),
-        .IN_H          (IN_H),
+        .K_H_MAX       (K_H_MAX),
+        .IN_H_MAX      (IN_H_MAX),
+        .ROW_BYTES_MAX (ROW_BYTES_MAX),
         .DATA_WIDTH    (DATA_WIDTH)
     ) u_line_buffer (
-        .clk          (clk),
-        .rst_n        (rst_n),
-        .clear        (lb_clear),
-        .allow_input  (allow_input),
-        .resume_write (resume_write),
-        .s_valid      (s_valid),
-        .s_ready      (s_ready),
-        .s_data       (s_data),
-        .s_last       (s_last),
-        .write_busy   (lb_write_busy),
-        .rows_written (rows_written),
-        .frame_done   (lb_frame_done),
-        .rd_en        (lb_rd_en),
-        .rd_row       (lb_rd_row),
-        .rd_col       (lb_rd_col),
-        .rd_ch        (lb_rd_ch),
-        .rd_valid     (lb_rd_valid),
-        .rd_byte      (lb_rd_byte)
+        .clk           (clk),
+        .rst_n         (rst_n),
+        .clear         (lb_clear),
+        .cfg_in_h      (in_h_q),
+        .cfg_row_bytes (BYTE_W'(row_bytes_full_q)),
+        .allow_input   (allow_input),
+        .resume_write  (resume_write),
+        .s_valid       (s_valid),
+        .s_ready       (s_ready),
+        .s_data        (s_data),
+        .s_last        (s_last),
+        .write_busy    (lb_write_busy),
+        .rows_written  (rows_written),
+        .frame_done    (lb_frame_done),
+        .rd_en         (lb_rd_en),
+        .rd_row        (lb_rd_row),
+        .rd_slot       (kh_slot),
+        .rd_offset     (lane_byte),
+        .rd_valid      (lb_rd_valid),
+        .rd_byte       (lb_rd_byte)
     );
 
     logic [OUT_Y_W-1:0]   out_y;
@@ -194,6 +312,10 @@ module window_gen #(
     logic signed [ROW_COORD_W-1:0] bottom_row;
     logic rows_ready;
 
+    function automatic logic [RING_W-1:0] next_slot(input logic [RING_W-1:0] s);
+        return (s == LAST_RING_SLOT) ? '0 : s + 1'b1;
+    endfunction
+
     always_comb begin
         // A restart is a request, not a command.  Honouring it mid-frame would
         // leave a half-reset pipeline -- counters at zero, stale bytes still
@@ -207,7 +329,7 @@ module window_gen #(
         // they are on.
         lb_clear     = restart_ok;
 
-        remaining_cols = OUT_W_VALUE - tile_x;
+        remaining_cols = out_w_q - tile_x;
         if (remaining_cols > 8)
             active_count = 4'd8;
         else
@@ -222,13 +344,18 @@ module window_gen #(
         lane_coord = '0;
         lane_coord[3:0] = gather_issue_lane;
 
-        bottom_row = out_base_row + KH_OFFSET;
+        bottom_row = out_base_row + kh_offset;
         source_row = out_base_row + kh_coord;
-        source_col = tile_base_col + kw_coord + (lane_coord * COL_STRIDE);
+        source_col = tile_base_col + kw_coord + lane_coord;
 
-        rows_ready = !lb_write_busy && (bottom_row >= NEG_ONE) &&
-                     (rows_written_coord > bottom_row);
-        allow_input = (state == ST_INPUT);
+        // Virtual bottom padding never arrives on the input stream (Person
+        // A's fix (b)).  Wait only for the last real row; ST_READ already
+        // emits zero outside the frame.  The write_busy guard against ring
+        // overwrite is unchanged.  A bad configuration never becomes ready.
+        rows_ready = !cfg_error && !lb_write_busy && (bottom_row >= NEG_ONE) &&
+                     ((bottom_row < in_h_coord) ? (rows_written_coord > bottom_row)
+                                                : (rows_written_coord == in_h_coord));
+        allow_input = (state == ST_INPUT) && !cfg_error;
         resume_write = 1'b0;
         if ((state == ST_INPUT) && rows_ready)
             allow_input = 1'b0;
@@ -242,21 +369,17 @@ module window_gen #(
         m_tile_row = out_y;
         m_tile_x = tile_x;
         m_tile_start = (state == ST_OUTPUT) && (k_count == '0);
-        m_tile_last = (state == ST_OUTPUT) && (k_count == LAST_K);
+        m_tile_last = (state == ST_OUTPUT) && (k_count == last_k_q);
         done = (state == ST_DONE);
 
         lb_rd_en = 1'b0;
         lb_rd_row = '0;
-        lb_rd_col = '0;
-        lb_rd_ch = '0;
         if ((state == ST_READ) && (gather_issue_lane < 8) &&
             (gather_issue_lane < active_count) &&
-            (source_row >= 0) && (source_row < IN_H) &&
-            (source_col >= 0) && (source_col < IN_W)) begin
+            (source_row >= 0) && (source_row < in_h_coord) &&
+            (source_col >= 0) && (source_col < in_w_coord)) begin
             lb_rd_en = 1'b1;
             lb_rd_row = source_row[ROW_W-1:0];
-            lb_rd_col = source_col[COL_W-1:0];
-            lb_rd_ch = ci_count;
         end
     end
 
@@ -292,8 +415,14 @@ module window_gen #(
             gather_capture_pending  <= 1'b0;
             gather_capture_from_lb  <= 1'b0;
             gather_reg              <= '0;
-            out_base_row            <= -PAD;
-            tile_base_col           <= -PAD;
+            out_base_row            <= pad_row_init;
+            tile_base_col           <= '0;
+            base_slot               <= init_slot;
+            kh_slot                 <= '0;
+            tile_byte               <= '0;
+            ci_byte                 <= '0;
+            kw_byte                 <= '0;
+            lane_byte               <= '0;
         end else if (restart_ok) begin
             // Exactly the reset values.  Anything left behind here would be
             // state from the previous frame leaking into the next one, and the
@@ -310,11 +439,24 @@ module window_gen #(
             gather_capture_pending  <= 1'b0;
             gather_capture_from_lb  <= 1'b0;
             gather_reg              <= '0;
-            out_base_row            <= -PAD;
-            tile_base_col           <= -PAD;
+            out_base_row            <= pad_row_init;
+            tile_base_col           <= '0;
+            base_slot               <= init_slot;
+            kh_slot                 <= '0;
+            tile_byte               <= '0;
+            ci_byte                 <= '0;
+            kw_byte                 <= '0;
+            lane_byte               <= '0;
         end else begin
             case (state)
                 ST_INPUT: begin
+                    // While idle the frame origin tracks the configured pad,
+                    // in the same cycles the geometry latch samples it.
+                    if (!frame_started) begin
+                        out_base_row <= pad_row_init;
+                        base_slot    <= init_slot;
+                    end
+
                     // A row can finish in the middle of an AXIS beat.  The
                     // line buffer keeps write_busy asserted until all bytes
                     // before the boundary have landed; row_pause then keeps
@@ -329,7 +471,12 @@ module window_gen #(
                         gather_capture_pending <= 1'b0;
                         gather_capture_from_lb <= 1'b0;
                         gather_reg             <= '0;
-                        tile_base_col          <= -PAD;
+                        tile_base_col          <= pad_col_init;
+                        kh_slot                <= base_slot;
+                        tile_byte              <= pad_byte_q;
+                        ci_byte                <= pad_byte_q;
+                        kw_byte                <= pad_byte_q;
+                        lane_byte              <= pad_byte_q;
                         state                  <= ST_READ;
                     end
                 end
@@ -352,6 +499,7 @@ module window_gen #(
                         gather_capture_pending <= 1'b1;
                         gather_capture_from_lb <= lb_rd_en;
                         gather_issue_lane      <= gather_issue_lane + 1'b1;
+                        lane_byte              <= lane_byte + c_phys_step;
                     end else begin
                         gather_capture_pending <= 1'b0;
                         gather_capture_from_lb <= 1'b0;
@@ -364,9 +512,9 @@ module window_gen #(
 
                 ST_OUTPUT: begin
                     if (m_ready) begin
-                        if (k_count == LAST_K) begin
+                        if (k_count == last_k_q) begin
                             if (remaining_cols <= 8) begin
-                                if (out_y == LAST_OUT_Y) begin
+                                if (out_y == last_out_y_q) begin
                                     state <= ST_DONE;
                                 end else begin
                                     out_y                   <= out_y + 1'b1;
@@ -379,8 +527,14 @@ module window_gen #(
                                     gather_capture_pending  <= 1'b0;
                                     gather_capture_from_lb  <= 1'b0;
                                     gather_reg              <= '0;
-                                    out_base_row            <= out_base_row + ROW_STRIDE;
-                                    tile_base_col           <= -PAD;
+                                    out_base_row            <= out_base_row + 1'b1;
+                                    tile_base_col           <= pad_col_init;
+                                    base_slot               <= next_slot(base_slot);
+                                    kh_slot                 <= next_slot(base_slot);
+                                    tile_byte               <= pad_byte_q;
+                                    ci_byte                 <= pad_byte_q;
+                                    kw_byte                 <= pad_byte_q;
+                                    lane_byte               <= pad_byte_q;
                                     state                   <= ST_INPUT;
                                 end
                             end else begin
@@ -394,20 +548,36 @@ module window_gen #(
                                 gather_capture_from_lb  <= 1'b0;
                                 gather_reg              <= '0;
                                 tile_base_col           <= tile_base_col + TILE_SOURCE_STEP;
+                                kh_slot                 <= base_slot;
+                                tile_byte               <= tile_byte + c_phys_tile_step;
+                                ci_byte                 <= tile_byte + c_phys_tile_step;
+                                kw_byte                 <= tile_byte + c_phys_tile_step;
+                                lane_byte               <= tile_byte + c_phys_tile_step;
                                 state                   <= ST_READ;
                             end
                         end else begin
                             k_count <= k_count + 1'b1;
-                            if (kw_count == LAST_KW) begin
+                            if (kw_count == last_kw_q) begin
                                 kw_count <= '0;
-                                if (kh_count == LAST_KH) begin
-                                    kh_count <= '0;
-                                    ci_count <= ci_count + 1'b1;
+                                if (kh_count == last_kh_q) begin
+                                    // Next channel, back to the window's top row.
+                                    kh_count  <= '0;
+                                    ci_count  <= ci_count + 1'b1;
+                                    kh_slot   <= base_slot;
+                                    ci_byte   <= ci_byte + 1'b1;
+                                    kw_byte   <= ci_byte + 1'b1;
+                                    lane_byte <= ci_byte + 1'b1;
                                 end else begin
-                                    kh_count <= kh_count + 1'b1;
+                                    // Next kernel row, same columns.
+                                    kh_count  <= kh_count + 1'b1;
+                                    kh_slot   <= next_slot(kh_slot);
+                                    kw_byte   <= ci_byte;
+                                    lane_byte <= ci_byte;
                                 end
                             end else begin
-                                kw_count <= kw_count + 1'b1;
+                                kw_count  <= kw_count + 1'b1;
+                                kw_byte   <= kw_byte + c_phys_step;
+                                lane_byte <= kw_byte + c_phys_step;
                             end
                             gather_issue_lane      <= '0;
                             gather_capture_pending <= 1'b0;
@@ -431,8 +601,8 @@ module window_gen #(
 
     property p_kernel_counters_in_range;
         @(posedge clk) disable iff (!rst_n)
-        (ci_count <= LAST_CI) && (kh_count <= LAST_KH) &&
-        (kw_count <= LAST_KW) && (k_count <= LAST_K);
+        (ci_count <= last_ci_q) && (kh_count <= last_kh_q) &&
+        (kw_count <= last_kw_q) && (k_count <= last_k_q);
     endproperty
     a_kernel_counters_in_range: assert property (p_kernel_counters_in_range);
 

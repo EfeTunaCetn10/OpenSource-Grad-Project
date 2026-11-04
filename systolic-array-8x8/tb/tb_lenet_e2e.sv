@@ -44,8 +44,8 @@ module lenet_e2e_stage #(
     bit checking,done_seen;
     string path;
 
-    conv1_top #(.ROWS(8),.COLS(8),.KERN_H(KH),.KERN_W(KW),
-        .C_IN(CI),.C_PHYS_STRIDE(PHYS),.IN_H(IN_H),.IN_W(IN_W),
+    // One datapath for every layer: envelope defaults, geometry on cfg_*.
+    conv1_top #(.ROWS(8),.COLS(8),
         .K_MAX(KMAX),.TILE_MAX(TILEMAX),.W_DEPTH(WD)) dut (
         .clk(clk),.rst_n(rst_n),.s_valid(s_valid),.s_ready(s_ready),
         .s_data(s_data),.s_last(s_last),.restart(restart),
@@ -53,6 +53,9 @@ module lenet_e2e_stage #(
         .w_wr_bank(w_wr_bank),.w_wr_addr(w_wr_addr),.w_wr_data(w_wr_data),
         .frame_start(frame_start),.cfg_active_rows(cfg_active_rows),
         .cfg_k_len(cfg_k_len),.cfg_tile_idx(cfg_tile_idx),
+        .cfg_in_h(6'(IN_H)),.cfg_in_w(6'(IN_W)),.cfg_c_in(9'(CI)),
+        .cfg_c_phys(9'(PHYS)),.cfg_kh(3'(KH)),.cfg_kw(3'(KW)),.cfg_pad(2'd0),
+        .cfg_w_base('0),
         .cfg_bias_q(cfg_bias_q),.cfg_m0(cfg_m0),
         .cfg_shift_n(cfg_shift_n),.cfg_relu(cfg_relu),.cfg_bypass(1'b0),
         .m_valid(m_valid),.m_ready(m_ready),.m_y_flat(m_y_flat),
