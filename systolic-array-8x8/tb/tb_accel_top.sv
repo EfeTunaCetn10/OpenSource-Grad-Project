@@ -153,7 +153,10 @@ module tb_accel_top;
         axi_write(12'h010, 32'h38E0_DA03);
         axi_read(12'h010, value);
         check(value == 32'h38E0_DA03, "LAYER_CFG readback");
-        axi_write(12'h014, 32'h0000_0100); // tile_idx=0, tile_count=1
+        axi_write(12'h018, 32'h0000_0003); // c_phys=3
+        axi_write(12'h01C, 32'h0000_0000); // weight-bank base=0
+        // tile_idx=0, tile_count=1, last_rows=6
+        axi_write(12'h014, 32'h0018_0100);
         for (int r = 0; r < 8; r++) begin
             axi_write(12'(12'h040 + 16*r), bias_mem[r]);
             axi_write(12'(12'h044 + 16*r), {14'b0,m0_mem[r]});
@@ -165,6 +168,9 @@ module tb_accel_top;
         axi_read(12'h0C4, value);
         check(value[23:0] == 0 && value[24], "commit status");
         check(dut.cfg_k_len == K_LEN, "registered k_len");
+        check(dut.cfg_in_h == 32 && dut.cfg_in_w == 32,
+              "registered input geometry");
+        check(dut.cfg_active_rows == 6, "last-tile active rows");
         load_weights();
 
         checking = 1;
@@ -205,6 +211,12 @@ module tb_accel_top;
         axi_read(12'h008, value);
         check(!value[1], "geometry mismatch started frame");
         check(out_seen == OUT_BEATS, "geometry mismatch emitted output");
+
+        // last_rows=2 makes a 10-channel layer expressible as tiles 8+2.
+        axi_write(12'h014, 32'h0008_0200); // first of two tiles
+        check(dut.cfg_active_rows == 8, "non-final tile active rows");
+        axi_write(12'h014, 32'h0008_0201); // final tile
+        check(dut.cfg_active_rows == 2, "final tile active rows");
 
         if (errors == 0) $display("PASS tb_accel_top: %0d bit-exact beats", out_seen);
         else $display("FAIL tb_accel_top: %0d errors", errors);

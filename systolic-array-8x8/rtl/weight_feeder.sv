@@ -10,7 +10,7 @@
 // a memory with neither a write port nor an initialization is a constant to
 // synthesis, so the whole weight path is optimized away while simulation stays
 // green (measured 2026-10-07 before the port existed).  Bank r supplies weight_data lane r, and every bank is
-// read at the same registered address (tile_idx*k_len + k).
+// read at the same registered address (base + tile_idx*k_len + k).
 //
 // INIT_PREFIX (default "") is option (b) of the ADR-011-preload-karar-memosu
 // decision memo: a parametric $readmemh initial value per bank, the pure-RTL
@@ -57,6 +57,7 @@ module weight_feeder #(
 
     input  logic                        start,
     output logic                        ready,
+    input  logic [ADDR_W-1:0]           base,
     input  logic [TILE_W-1:0]           tile_idx,
     input  logic [K_W-1:0]              k_len,
 
@@ -68,8 +69,8 @@ module weight_feeder #(
     output logic                        cfg_error
 );
     localparam int WORD_W = ROWS * DATA_WIDTH;
-    localparam int BASE_W = TILE_W + K_W;
-    localparam int END_W  = BASE_W + 1;
+    localparam int OFFSET_W = TILE_W + K_W;
+    localparam int CALC_W = ((ADDR_W > OFFSET_W) ? ADDR_W : OFFSET_W) + 1;
 
     // One ONE-dimensional array per bank, declared inside a generate block.
     // A single two-dimensional `bank_mem [0:ROWS-1][0:DEPTH-1]` is functionally
@@ -83,8 +84,10 @@ module weight_feeder #(
     // ADR-011's eight physically separate banks one-to-one -- the eight .coe /
     // Block Memory Generator instances of that ADR drop into this same place.
 
-    logic [BASE_W-1:0] base_calc;
-    logic [END_W-1:0]  end_calc;
+    logic [ADDR_W-1:0]   base_effective;
+    logic [OFFSET_W-1:0] tile_offset_calc;
+    logic [CALC_W-1:0]   base_calc;
+    logic [CALC_W-1:0]   end_calc;
     logic [ADDR_W-1:0] base_reg;
     logic [ADDR_W-1:0] next_addr;
     logic [K_W-1:0]    len_reg;
@@ -108,12 +111,22 @@ module weight_feeder #(
     logic issue_read;
     logic last_accept;
 
-    // Share the sole multiplication between the registered base and the
-    // overflow guard.  Its result is sampled only on an accepted start.
+    // Share the sole multiplication between the registered start address and
+    // the overflow guard.  Both additions and the product are sampled only on
+    // an accepted start; the per-beat path increments next_addr by one.
     always_comb begin
-        base_calc = $unsigned(tile_idx) * $unsigned(k_len);
-        end_calc  = {{(END_W-BASE_W){1'b0}}, base_calc}
-                    + {{(END_W-K_W){1'b0}}, k_len};
+        base_effective = base;
+`ifndef SYNTHESIS
+        // R-lane compatibility only: the pre-runtime conv1_top does not yet
+        // have the integration seam for this new port.  Treat that legacy
+        // unconnected X/Z input as base zero until lane G is merged.
+        if ($isunknown(base))
+            base_effective = '0;
+`endif
+        tile_offset_calc = $unsigned(tile_idx) * $unsigned(k_len);
+        base_calc = {{(CALC_W-ADDR_W){1'b0}}, base_effective}
+                    + {{(CALC_W-OFFSET_W){1'b0}}, tile_offset_calc};
+        end_calc  = base_calc + {{(CALC_W-K_W){1'b0}}, k_len};
     end
 
     assign ready        = !active;
@@ -153,7 +166,7 @@ module weight_feeder #(
                 // A rejected command never enters active state, so the
                 // controller remains ready and cannot deadlock its caller.
                 if ((k_len == 0) || (int'(k_len) > K_MAX) ||
-                    (end_calc > END_W'(DEPTH))) begin
+                    (end_calc > CALC_W'(DEPTH))) begin
                     cfg_error <= 1'b1;
                 end else begin
                     base_reg       <= base_calc[ADDR_W-1:0];

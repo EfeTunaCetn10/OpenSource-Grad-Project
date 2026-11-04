@@ -51,6 +51,7 @@ module axi_lite_regs #(
     output logic                  start,
     output logic                  soft_reset,
     output logic                  counter_clear,
+    output logic                  cfg_commit,
 
     // Active, committed parameter image.  Unpacked arrays are used so one
     // requant_unit can connect directly to each bank without a packing shim.
@@ -60,6 +61,7 @@ module axi_lite_regs #(
     output logic                  cfg_relu   [0:7],
     output logic                  cfg_bypass,
     output logic [8:0]            cfg_c_in,
+    output logic [8:0]            cfg_c_phys,
     output logic [2:0]            cfg_kh,
     output logic [2:0]            cfg_kw,
     output logic [1:0]            cfg_stride,
@@ -68,14 +70,16 @@ module axi_lite_regs #(
     output logic [5:0]            cfg_out_w,
     output logic [7:0]            cfg_tile_idx,
     output logic [7:0]            cfg_tile_count,
+    output logic [3:0]            cfg_last_rows,
     output logic                  cfg_param_src,
-    output logic [15:0]           cfg_k_len
+    output logic [15:0]           cfg_k_len,
+    output logic [15:0]           cfg_w_base
 );
 
     // Version fields are intentionally local to this block so a map change
     // cannot be made without leaving a visible software version trace.
     localparam logic [15:0] RTL_VERSION    = 16'h0001;
-    localparam logic [15:0] REGMAP_VERSION = 16'h0001;
+    localparam logic [15:0] REGMAP_VERSION = 16'h0002;
 
     localparam logic [ADDR_W-1:0] A_VERSION      = 12'h000;
     localparam logic [ADDR_W-1:0] A_CONTROL      = 12'h004;
@@ -83,6 +87,8 @@ module axi_lite_regs #(
     localparam logic [ADDR_W-1:0] A_ERROR        = 12'h00C;
     localparam logic [ADDR_W-1:0] A_LAYER_CFG    = 12'h010;
     localparam logic [ADDR_W-1:0] A_TILE_CFG     = 12'h014;
+    localparam logic [ADDR_W-1:0] A_LAYER_CFG2   = 12'h018;
+    localparam logic [ADDR_W-1:0] A_W_BASE       = 12'h01C;
     localparam logic [ADDR_W-1:0] A_PARAM_BASE   = 12'h040;
     localparam logic [ADDR_W-1:0] A_PARAM_END    = 12'h0BC;
     localparam logic [ADDR_W-1:0] A_COMMIT       = 12'h0C0;
@@ -93,7 +99,9 @@ module axi_lite_regs #(
     localparam logic [ADDR_W-1:0] A_FRAME_COUNT  = 12'h10C;
 
     logic [30:0] layer_cfg_reg;
-    logic [17:0] tile_cfg_reg;
+    logic [21:0] tile_cfg_reg;
+    logic [8:0]  layer_cfg2_reg;
+    logic [15:0] w_base_reg;
     logic        irq_en;
 
     logic signed [31:0] shadow_bias_q [0:7];
@@ -133,6 +141,8 @@ module axi_lite_regs #(
     logic        commit_accept;
     logic        write_param;
     logic [31:0] layer_merged;
+    logic [31:0] layer2_merged;
+    logic [31:0] w_base_merged;
 
     integer i;
     integer j;
@@ -176,15 +186,15 @@ module axi_lite_regs #(
         end
     endfunction
 
-    function automatic logic [17:0] merge_tile(
-        input logic [17:0] old_value,
+    function automatic logic [21:0] merge_tile(
+        input logic [21:0] old_value,
         input logic [31:0] new_value,
         input logic [3:0]  strb
     );
         logic [31:0] merged;
         begin
-            merged = merge_wstrb({14'h0, old_value}, new_value, strb);
-            merge_tile = merged[17:0];
+            merged = merge_wstrb({10'h0, old_value}, new_value, strb);
+            merge_tile = merged[21:0];
         end
     endfunction
 
@@ -216,7 +226,13 @@ module axi_lite_regs #(
                     read_mux = {1'b0, layer_cfg_reg};
                 end
                 A_TILE_CFG: begin
-                    read_mux[17:0] = tile_cfg_reg;
+                    read_mux[21:0] = tile_cfg_reg;
+                end
+                A_LAYER_CFG2: begin
+                    read_mux[8:0] = layer_cfg2_reg;
+                end
+                A_W_BASE: begin
+                    read_mux[15:0] = w_base_reg;
                 end
                 A_PARAM_STATUS: begin
                     read_mux[23:0] = written_mask;
@@ -263,6 +279,10 @@ module axi_lite_regs #(
         write_word = write_addr[3:2];
         layer_merged = merge_wstrb({1'b0, layer_cfg_reg}, write_data,
                                    write_strb);
+        layer2_merged = merge_wstrb({23'h0, layer_cfg2_reg}, write_data,
+                                    write_strb);
+        w_base_merged = merge_wstrb({16'h0, w_base_reg}, write_data,
+                                    write_strb);
 
         write_param = write_complete &&
                       (write_addr >= A_PARAM_BASE) &&
@@ -300,6 +320,8 @@ module axi_lite_regs #(
             write_strb[0] && write_data[0] && !busy) begin
             if (tile_cfg_reg[17] ? !table_valid : !committed)
                 error_set_this_cycle[7] = 1'b1;
+            if (cfg_stride != 2'd1)
+                error_set_this_cycle[7] = 1'b1;
         end
 
         commit_accept = write_complete && (write_addr == A_COMMIT) &&
@@ -320,6 +342,7 @@ module axi_lite_regs #(
         end
         cfg_bypass = tile_cfg_reg[16];
         cfg_c_in = layer_cfg_reg[8:0];
+        cfg_c_phys = layer_cfg2_reg;
         cfg_kh = layer_cfg_reg[11:9];
         cfg_kw = layer_cfg_reg[14:12];
         cfg_stride = layer_cfg_reg[16:15];
@@ -328,14 +351,18 @@ module axi_lite_regs #(
         cfg_out_w = layer_cfg_reg[30:25];
         cfg_tile_idx = tile_cfg_reg[7:0];
         cfg_tile_count = tile_cfg_reg[15:8];
+        cfg_last_rows = tile_cfg_reg[21:18];
         cfg_param_src = tile_cfg_reg[17];
+        cfg_w_base = w_base_reg;
     end
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             layer_cfg_reg <= '0;
+            layer_cfg2_reg <= '0;
+            w_base_reg <= '0;
             cfg_k_len <= '0;
-            tile_cfg_reg <= 18'h0;
+            tile_cfg_reg <= '0;
             irq_en <= 1'b0;
             written_mask <= 24'h0;
             committed <= 1'b0;
@@ -354,6 +381,7 @@ module axi_lite_regs #(
             start <= 1'b0;
             soft_reset <= 1'b0;
             counter_clear <= 1'b0;
+            cfg_commit <= 1'b0;
             for (i = 0; i < 8; i = i + 1) begin
                 shadow_bias_q[i] <= '0;
                 shadow_m0[i] <= '0;
@@ -368,6 +396,7 @@ module axi_lite_regs #(
             start <= 1'b0;
             soft_reset <= 1'b0;
             counter_clear <= 1'b0;
+            cfg_commit <= 1'b0;
 
             // A datapath event is latched.  W1C is applied first, then the
             // event is ORed back in, so an event cannot be lost.
@@ -419,7 +448,8 @@ module axi_lite_regs #(
                         if (write_strb[0]) begin
                             irq_en <= write_data[2];
                             if (write_data[0] && !busy &&
-                                (tile_cfg_reg[17] ? table_valid : committed))
+                                (tile_cfg_reg[17] ? table_valid : committed) &&
+                                (cfg_stride == 2'd1))
                                 start <= 1'b1;
                             if (write_data[1]) begin
                                 soft_reset <= 1'b1;
@@ -434,11 +464,18 @@ module axi_lite_regs #(
                         tile_cfg_reg <= merge_tile(tile_cfg_reg, write_data,
                                                    write_strb);
                     end
+                    A_LAYER_CFG2: begin
+                        layer_cfg2_reg <= layer2_merged[8:0];
+                    end
+                    A_W_BASE: begin
+                        w_base_reg <= w_base_merged[15:0];
+                    end
                     A_COMMIT: begin
                         if (commit_accept) begin
                             // Geometry is stable before a later START.  The
                             // bounded 9x3x3 product is sampled only on commit.
                             cfg_k_len <= cfg_c_in * cfg_kh * cfg_kw;
+                            cfg_commit <= 1'b1;
                             for (i = 0; i < 8; i = i + 1) begin
                                 active_bias_q[i] <= shadow_bias_q[i];
                                 active_m0[i] <= shadow_m0[i];

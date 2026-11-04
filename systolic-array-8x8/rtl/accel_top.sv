@@ -1,16 +1,15 @@
 `timescale 1ns/1ps
 
-// AXI4-Lite control plane around the fixed-geometry conv1 datapath.
+// AXI4-Lite control plane around the runtime-geometry convolution datapath.
 module accel_top #(
     parameter int ROWS = 8,
-    parameter int C_OUT = 6,
-    parameter int KERN_H = 5,
-    parameter int KERN_W = 5,
-    parameter int C_IN = 3,
-    parameter int IN_H = 32,
-    parameter int IN_W = 32,
-    parameter int STRIDE = 1,
-    parameter int PAD = 0,
+    parameter int IN_H_MAX = 48,
+    parameter int IN_W_MAX = 48,
+    parameter int C_MAX = 511,
+    parameter int ROW_BYTES_MAX = 512,
+    parameter int K_H_MAX = 5,
+    parameter int K_W_MAX = 5,
+    parameter int PAD_MAX = 2,
     parameter int K_MAX = 1024,
     parameter int TILE_MAX = 16,
     parameter int W_DEPTH = 8192,
@@ -53,47 +52,94 @@ module accel_top #(
     // Phase 2: connect this to window_gen.restart.  No partial local reset.
     output logic soft_reset
 );
-    localparam int OUT_H = (IN_H + 2*PAD - KERN_H) / STRIDE + 1;
-    localparam int OUT_W = (IN_W + 2*PAD - KERN_W) / STRIDE + 1;
     localparam int ROW_W = $clog2(ROWS+1);
     localparam int K_W = $clog2(K_MAX+1);
     localparam int TILE_W = $clog2(TILE_MAX);
+    localparam int IN_H_W = $clog2(IN_H_MAX+1);
+    localparam int IN_W_W = $clog2(IN_W_MAX+1);
+    localparam int GEOM_CALC_W = 19;
 
-    logic start, counter_clear, busy, layer_done;
+    logic start, counter_clear, cfg_commit, busy, layer_done;
     logic [31:0] cycle_count, cycle_count_raw, cycle_count_base;
     logic [31:0] stall_in, stall_out, frame_count;
     logic [7:0] error_flags, hw_error_set;
     logic lockstep_error, drain_stall;
-    logic [8:0] cfg_c_in;
+    logic [8:0] cfg_c_in, cfg_c_phys;
     logic [2:0] cfg_kh, cfg_kw;
     logic [1:0] cfg_stride, cfg_pad;
     logic [5:0] cfg_out_h, cfg_out_w;
     logic [7:0] cfg_tile_idx, cfg_tile_count;
+    logic [3:0] cfg_last_rows;
     logic cfg_param_src, cfg_bypass;
     logic [15:0] cfg_k_len;
+    logic [15:0] cfg_w_base_reg;
+    logic [$clog2(W_DEPTH)-1:0] cfg_w_base;
     logic signed [31:0] cfg_bias_q [0:7];
     logic signed [17:0] cfg_m0 [0:7];
     logic [5:0] cfg_shift_n [0:7];
     logic cfg_relu [0:7];
     logic geometry_ok, frame_start;
+    logic [ROW_W-1:0] cfg_active_rows;
+    logic [IN_H_W-1:0] cfg_in_h;
+    logic [IN_W_W-1:0] cfg_in_w;
+    logic geometry_valid_reg;
+    logic geometry_check_pending;
+    logic basic_geometry_valid_reg;
+    logic signed [GEOM_CALC_W-1:0] in_h_calc, in_w_calc;
+    logic [GEOM_CALC_W-1:0] row_bytes_calc, weight_end_calc;
+    logic [GEOM_CALC_W-1:0] row_bytes_reg, weight_end_reg;
+    logic [8:0] committed_c_in, committed_c_phys;
+    logic [2:0] committed_kh, committed_kw;
+    logic [1:0] committed_stride, committed_pad;
+    logic [5:0] committed_out_h, committed_out_w;
+    logic [7:0] committed_tile_idx, committed_tile_count;
+    logic [3:0] committed_last_rows;
+    logic committed_param_src;
+    logic [15:0] committed_k_len, committed_w_base;
     logic [7:0] flags_seen;
     logic lockstep_seen;
 
-    // TILE_CFG.tile_count counts output-channel tiles, not channels.  This
-    // fixed conv1 instance has C_OUT=6 in its sole tile; the final tile size
-    // cannot be reconstructed from tile_count alone for a generic layer.
-    localparam logic [ROW_W-1:0] ACTIVE_ROWS = ROW_W'(C_OUT);
+    // Runtime-derived values are sampled only after a successful COMMIT.  No
+    // multiply or subtract is present in a per-beat address path.
+    always_comb begin
+        in_h_calc = $signed({1'b0, cfg_out_h}) +
+                    $signed({1'b0, cfg_kh}) - 1 -
+                    (2 * $signed({1'b0, cfg_pad}));
+        in_w_calc = $signed({1'b0, cfg_out_w}) +
+                    $signed({1'b0, cfg_kw}) - 1 -
+                    (2 * $signed({1'b0, cfg_pad}));
+        row_bytes_calc = GEOM_CALC_W'($unsigned(in_w_calc)) *
+                         GEOM_CALC_W'($unsigned(cfg_c_phys));
+        weight_end_calc = $unsigned(cfg_w_base_reg) +
+                          (GEOM_CALC_W'({1'b0, cfg_tile_idx} + 1'b1) *
+                           GEOM_CALC_W'($unsigned(cfg_k_len)));
+    end
 
-    assign geometry_ok =
-        (cfg_c_in == 9'(C_IN)) &&
-        (cfg_kh == 3'(KERN_H)) && (cfg_kw == 3'(KERN_W)) &&
-        (cfg_stride == 2'(STRIDE)) && (cfg_pad == 2'(PAD)) &&
-        (cfg_out_h == 6'(OUT_H)) && (cfg_out_w == 6'(OUT_W)) &&
-        (cfg_k_len == 16'(C_IN*KERN_H*KERN_W)) &&
-        (cfg_tile_idx == 8'd0) && (cfg_tile_count == 8'd1) &&
-        !cfg_param_src && (C_OUT > 0) && (C_OUT <= ROWS);
+    always_comb begin
+        if ((cfg_tile_count != 0) &&
+            (cfg_tile_idx < (cfg_tile_count - 1'b1)))
+            cfg_active_rows = ROW_W'(ROWS);
+        else if (cfg_last_rows == 0)
+            cfg_active_rows = ROW_W'(ROWS);
+        else
+            cfg_active_rows = ROW_W'(cfg_last_rows);
+    end
+
+    assign geometry_ok = geometry_valid_reg &&
+        (cfg_c_in == committed_c_in) &&
+        (cfg_c_phys == committed_c_phys) &&
+        (cfg_kh == committed_kh) && (cfg_kw == committed_kw) &&
+        (cfg_stride == committed_stride) && (cfg_pad == committed_pad) &&
+        (cfg_out_h == committed_out_h) && (cfg_out_w == committed_out_w) &&
+        (cfg_tile_idx == committed_tile_idx) &&
+        (cfg_tile_count == committed_tile_count) &&
+        (cfg_last_rows == committed_last_rows) &&
+        (cfg_param_src == committed_param_src) &&
+        (cfg_k_len == committed_k_len) &&
+        (cfg_w_base_reg == committed_w_base);
     assign frame_start = start && geometry_ok;
     assign cycle_count = cycle_count_raw - cycle_count_base;
+    assign cfg_w_base = cfg_w_base_reg[$clog2(W_DEPTH)-1:0];
 
     // ADR-015 ERROR map:
     // [0] ERR_CFG_M0: register validator only.
@@ -123,9 +169,70 @@ module accel_top #(
             cycle_count_base <= '0;
             flags_seen <= '0;
             lockstep_seen <= 1'b0;
+            cfg_in_h <= '0;
+            cfg_in_w <= '0;
+            geometry_valid_reg <= 1'b0;
+            geometry_check_pending <= 1'b0;
+            basic_geometry_valid_reg <= 1'b0;
+            row_bytes_reg <= '0;
+            weight_end_reg <= '0;
+            committed_c_in <= '0;
+            committed_c_phys <= '0;
+            committed_kh <= '0;
+            committed_kw <= '0;
+            committed_stride <= '0;
+            committed_pad <= '0;
+            committed_out_h <= '0;
+            committed_out_w <= '0;
+            committed_tile_idx <= '0;
+            committed_tile_count <= '0;
+            committed_last_rows <= '0;
+            committed_param_src <= 1'b0;
+            committed_k_len <= '0;
+            committed_w_base <= '0;
         end else begin
             flags_seen <= error_flags;
             lockstep_seen <= lockstep_error;
+            geometry_check_pending <= 1'b0;
+            if (cfg_commit) begin
+                cfg_in_h <= IN_H_W'(in_h_calc);
+                cfg_in_w <= IN_W_W'(in_w_calc);
+                row_bytes_reg <= row_bytes_calc;
+                weight_end_reg <= weight_end_calc;
+                geometry_check_pending <= 1'b1;
+                geometry_valid_reg <= 1'b0;
+                basic_geometry_valid_reg <=
+                    (cfg_c_in != 0) && (cfg_c_in <= C_MAX) &&
+                    (cfg_c_phys >= cfg_c_in) && (cfg_c_phys <= C_MAX) &&
+                    (cfg_kh != 0) && (cfg_kh <= K_H_MAX) &&
+                    (cfg_kw != 0) && (cfg_kw <= K_W_MAX) &&
+                    (cfg_stride == 1) && (cfg_pad <= PAD_MAX) &&
+                    (in_h_calc > 0) && (in_h_calc <= IN_H_MAX) &&
+                    (in_w_calc > 0) && (in_w_calc <= IN_W_MAX) &&
+                    (cfg_k_len != 0) && (cfg_k_len <= K_MAX) &&
+                    (cfg_tile_count != 0) &&
+                    (cfg_tile_count <= TILE_MAX) &&
+                    (cfg_tile_idx < cfg_tile_count) &&
+                    (cfg_last_rows <= ROWS) && !cfg_param_src;
+                committed_c_in <= cfg_c_in;
+                committed_c_phys <= cfg_c_phys;
+                committed_kh <= cfg_kh;
+                committed_kw <= cfg_kw;
+                committed_stride <= cfg_stride;
+                committed_pad <= cfg_pad;
+                committed_out_h <= cfg_out_h;
+                committed_out_w <= cfg_out_w;
+                committed_tile_idx <= cfg_tile_idx;
+                committed_tile_count <= cfg_tile_count;
+                committed_last_rows <= cfg_last_rows;
+                committed_param_src <= cfg_param_src;
+                committed_k_len <= cfg_k_len;
+                committed_w_base <= cfg_w_base_reg;
+            end else if (geometry_check_pending) begin
+                geometry_valid_reg <= basic_geometry_valid_reg &&
+                                      (row_bytes_reg <= ROW_BYTES_MAX) &&
+                                      (weight_end_reg <= W_DEPTH);
+            end
             if (counter_clear) begin
                 cycle_count_base <= cycle_count_raw;
                 stall_in <= '0;
@@ -152,25 +259,26 @@ module accel_top #(
         .stall_in(stall_in), .stall_out(stall_out), .frame_count(frame_count),
         .table_valid(1'b0), // Stage 1 has no BRAM parameter table.
         .hw_error_set(hw_error_set), .start(start), .soft_reset(soft_reset),
-        .counter_clear(counter_clear), .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
+        .counter_clear(counter_clear), .cfg_commit(cfg_commit),
+        .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
         .cfg_shift_n(cfg_shift_n), .cfg_relu(cfg_relu), .cfg_bypass(cfg_bypass),
-        .cfg_c_in(cfg_c_in), .cfg_kh(cfg_kh), .cfg_kw(cfg_kw),
+        .cfg_c_in(cfg_c_in), .cfg_c_phys(cfg_c_phys),
+        .cfg_kh(cfg_kh), .cfg_kw(cfg_kw),
         .cfg_stride(cfg_stride), .cfg_pad(cfg_pad), .cfg_out_h(cfg_out_h),
         .cfg_out_w(cfg_out_w), .cfg_tile_idx(cfg_tile_idx),
-        .cfg_tile_count(cfg_tile_count), .cfg_param_src(cfg_param_src),
-        .cfg_k_len(cfg_k_len)
+        .cfg_tile_count(cfg_tile_count), .cfg_last_rows(cfg_last_rows),
+        .cfg_param_src(cfg_param_src), .cfg_k_len(cfg_k_len),
+        .cfg_w_base(cfg_w_base_reg)
     );
 
     conv1_top #(
-        .ROWS(ROWS), .KERN_H(KERN_H), .KERN_W(KERN_W), .C_IN(C_IN),
-        .IN_H(IN_H), .IN_W(IN_W), .STRIDE(STRIDE), .PAD(PAD),
-        .K_MAX(K_MAX), .TILE_MAX(TILE_MAX), .W_DEPTH(W_DEPTH)
+        .ROWS(ROWS), .K_MAX(K_MAX), .TILE_MAX(TILE_MAX), .W_DEPTH(W_DEPTH)
     ) u_conv1 (
         .clk(clk), .rst_n(rst_n), .s_valid(s_valid), .s_ready(s_ready),
         .s_data(s_data), .s_last(s_last),
         .w_wr_en(w_wr_en), .w_wr_bank(w_wr_bank), .w_wr_addr(w_wr_addr),
         .w_wr_data(w_wr_data), .frame_start(frame_start),
-        .cfg_active_rows(ACTIVE_ROWS), .cfg_k_len(cfg_k_len[K_W-1:0]),
+        .cfg_active_rows(cfg_active_rows), .cfg_k_len(cfg_k_len[K_W-1:0]),
         .cfg_tile_idx(cfg_tile_idx[TILE_W-1:0]),
         .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
         .cfg_shift_n(cfg_shift_n), .cfg_relu(cfg_relu), .cfg_bypass(cfg_bypass),
@@ -181,4 +289,7 @@ module accel_top #(
         .error_flags(error_flags), .lockstep_error(lockstep_error),
         .drain_stall(drain_stall), .engine_cycle_count(cycle_count_raw)
     );
+
+    // INTEGRATION: connect to conv1_top cfg_in_h/cfg_in_w/cfg_c_in/
+    // cfg_c_phys/cfg_kh/cfg_kw/cfg_pad/cfg_w_base after lane G is merged.
 endmodule
