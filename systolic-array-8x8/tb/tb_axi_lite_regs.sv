@@ -24,24 +24,27 @@ module tb_axi_lite_regs;
     logic busy, done, table_valid;
     logic [31:0] cycle_count, stall_in, stall_out, frame_count;
     logic [7:0] hw_error_set;
-    logic start, soft_reset, counter_clear;
+    logic start, soft_reset, counter_clear, cfg_commit;
     logic signed [31:0] cfg_bias_q [0:7];
     logic signed [17:0] cfg_m0 [0:7];
     logic [5:0] cfg_shift_n [0:7];
     logic cfg_relu [0:7];
     logic cfg_bypass;
-    logic [8:0] cfg_c_in;
+    logic [8:0] cfg_c_in, cfg_c_phys;
     logic [2:0] cfg_kh, cfg_kw;
     logic [1:0] cfg_stride, cfg_pad;
     logic [5:0] cfg_out_h, cfg_out_w;
     logic [7:0] cfg_tile_idx, cfg_tile_count;
+    logic [3:0] cfg_last_rows;
     logic cfg_param_src;
     logic [15:0] cfg_k_len;
+    logic [15:0] cfg_w_base;
 
     integer errors = 0;
     integer start_seen = 0;
     integer soft_seen = 0;
     integer clear_seen = 0;
+    integer commit_seen = 0;
     integer i;
 
     always #5 clk = ~clk;
@@ -60,13 +63,16 @@ module tb_axi_lite_regs;
         .stall_out(stall_out), .frame_count(frame_count),
         .table_valid(table_valid), .hw_error_set(hw_error_set),
         .start(start), .soft_reset(soft_reset), .counter_clear(counter_clear),
+        .cfg_commit(cfg_commit),
         .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
         .cfg_shift_n(cfg_shift_n), .cfg_relu(cfg_relu),
-        .cfg_bypass(cfg_bypass), .cfg_c_in(cfg_c_in), .cfg_kh(cfg_kh),
+        .cfg_bypass(cfg_bypass), .cfg_c_in(cfg_c_in), .cfg_c_phys(cfg_c_phys),
+        .cfg_w_base(cfg_w_base), .cfg_kh(cfg_kh),
         .cfg_kw(cfg_kw), .cfg_stride(cfg_stride), .cfg_pad(cfg_pad),
         .cfg_out_h(cfg_out_h), .cfg_out_w(cfg_out_w),
         .cfg_tile_idx(cfg_tile_idx), .cfg_tile_count(cfg_tile_count),
-        .cfg_param_src(cfg_param_src), .cfg_k_len(cfg_k_len)
+        .cfg_last_rows(cfg_last_rows), .cfg_param_src(cfg_param_src),
+        .cfg_k_len(cfg_k_len)
     );
 
     always @(posedge clk) begin
@@ -74,6 +80,7 @@ module tb_axi_lite_regs;
             if (start) start_seen = start_seen + 1;
             if (soft_reset) soft_seen = soft_seen + 1;
             if (counter_clear) clear_seen = clear_seen + 1;
+            if (cfg_commit) commit_seen = commit_seen + 1;
         end
     end
 
@@ -214,7 +221,7 @@ module tb_axi_lite_regs;
         rst_n = 1'b1;
 
         axi_read(12'h000, 2, value);
-        check(value == 32'h0001_0001, "VERSION mismatch");
+        check(value == 32'h0001_0002, "VERSION mismatch");
         axi_read(12'h008, 1, value);
         check(value[0] && !value[1] && !value[2] && !value[3],
               "reset STATUS mismatch");
@@ -226,8 +233,17 @@ module tb_axi_lite_regs;
               cfg_out_h == 28 && cfg_out_w == 28,
               "LAYER_CFG decoded fields mismatch");
         check(cfg_k_len == 0, "k_len changed before commit");
-        axi_write(12'h014, 32'h0002_0103, 4'hF, 1'b1, 0, 0);
-        check(cfg_tile_idx == 3 && cfg_tile_count == 1 && cfg_param_src,
+        axi_write(12'h018, 32'hFFFF_FE03, 4'hF, 1'b0, 1, 0);
+        axi_read(12'h018, 0, value);
+        check(value == 32'h0000_0003 && cfg_c_phys == 3,
+              "LAYER_CFG2 RAZ/WI or decode mismatch");
+        axi_write(12'h01C, 32'hABCD_0123, 4'hF, 1'b1, 0, 0);
+        axi_read(12'h01C, 0, value);
+        check(value == 32'h0000_0123 && cfg_w_base == 16'h0123,
+              "W_BASE RAZ/WI or decode mismatch");
+        axi_write(12'h014, 32'h001A_0103, 4'hF, 1'b1, 0, 0);
+        check(cfg_tile_idx == 3 && cfg_tile_count == 1 && cfg_param_src &&
+              cfg_last_rows == 6,
               "TILE_CFG decoded fields mismatch");
         axi_write(12'h014, 32'h0, 4'hF, 1'b1, 0, 0);
 
@@ -290,6 +306,9 @@ module tb_axi_lite_regs;
         axi_read(12'h0C4, 1, value);
         check(value[24] && value[23:0] == 24'h0, "valid commit status mismatch");
         check(cfg_k_len == 75, "registered k_len mismatch after commit");
+        check(commit_seen == 1, "successful commit pulse mismatch");
+        check(cfg_c_phys == 3 && cfg_w_base == 16'h0123,
+              "committed geometry extension outputs mismatch");
         for (i = 0; i < 8; i = i + 1) begin
             axi_read(12'h040 + i*16, 0, value);
             if (i == 0)
@@ -317,6 +336,15 @@ module tb_axi_lite_regs;
         check(soft_seen == 1 && clear_seen == 1, "SOFT_RESET/counter_clear pulse missing");
         axi_read(12'h004, 1, value);
         check(value[1:0] == 2'b00, "SOFT_RESET did not self-clear");
+
+        // Runtime convolution stride is fixed at one.  A non-one shadow
+        // value must refuse START and reuse the geometry/parameter error bit.
+        axi_write(12'h010, 32'h38E1_5A03, 4'hF, 1'b0, 0, 0);
+        axi_write(12'h004, 32'h1, 4'h1, 1'b1, 0, 0);
+        check(start_seen == 1, "stride!=1 START was emitted");
+        check_error_bit(7, "stride!=1 START did not set ERR_PARAM_INCOMPLETE");
+        clear_errors();
+        axi_write(12'h010, 32'h38E0_DA03, 4'hF, 1'b1, 0, 0);
 
         // PARAM_SRC=1 has a separate table-valid guard.  STATUS[4] exposes
         // the condition, while the normative ERR_PARAM_INCOMPLETE bit is
@@ -349,7 +377,7 @@ module tb_axi_lite_regs;
         check(value[7:0] == 8'h0, "all ERROR bits did not clear");
 
         // Unmapped reads complete and return zero even with delayed RREADY.
-        axi_read(12'h018, 5, value);
+        axi_read(12'h020, 5, value);
         check(value == 32'h0, "unmapped read did not return zero");
 
         // Reset in the middle of an AW-only transaction must discard it and

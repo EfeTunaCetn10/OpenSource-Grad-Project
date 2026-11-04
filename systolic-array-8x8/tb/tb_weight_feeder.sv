@@ -25,6 +25,7 @@ module tb_weight_feeder;
     logic [DATA_WIDTH-1:0] wr_data = '0;
     logic start = 1'b0;
     logic ready;
+    logic [ADDR_W-1:0] base = '0;
     logic [TILE_W-1:0] tile_idx = '0;
     logic [K_W-1:0] k_len = '0;
     logic weight_valid;
@@ -70,6 +71,7 @@ module tb_weight_feeder;
         .wr_data      (wr_data),
         .start        (start),
         .ready        (ready),
+        .base         (base),
         .tile_idx     (tile_idx),
         .k_len        (k_len),
         .weight_valid (weight_valid),
@@ -88,6 +90,7 @@ module tb_weight_feeder;
 
     task automatic check_word(
         input integer beat,
+        input integer base_addr,
         input integer tile,
         input integer len
     );
@@ -96,7 +99,7 @@ module tb_weight_feeder;
         logic [7:0] got;
         logic [7:0] exp;
         begin
-            addr = tile*len + beat;
+            addr = base_addr + tile*len + beat;
             for (lane = 0; lane < ROWS; lane = lane + 1) begin
                 got = weight_data[lane*DATA_WIDTH +: DATA_WIDTH];
                 exp = mem_pattern(lane, addr);
@@ -109,11 +112,16 @@ module tb_weight_feeder;
         end
     endtask
 
-    task automatic pulse_start(input integer tile, input integer len);
+    task automatic pulse_start(
+        input integer base_addr,
+        input integer tile,
+        input integer len
+    );
         begin
             while (!ready)
                 @(negedge clk);
             @(negedge clk);
+            base     = base_addr[ADDR_W-1:0];
             tile_idx = tile[TILE_W-1:0];
             k_len    = len[K_W-1:0];
             start    = 1'b1;
@@ -124,6 +132,7 @@ module tb_weight_feeder;
     endtask
 
     task automatic run_tile(
+        input integer base_addr,
         input integer tile,
         input integer len,
         input integer stall_cycles,
@@ -137,7 +146,7 @@ module tb_weight_feeder;
         logic   held_valid;
         logic [ROWS*DATA_WIDTH-1:0] held_data;
         begin
-            pulse_start(tile, len);
+            pulse_start(base_addr, tile, len);
             accepted      = 0;
             guard         = 0;
             stall_left    = stall_cycles;
@@ -174,7 +183,7 @@ module tb_weight_feeder;
                     if (accepted >= len)
                         fail("extra accepted beat");
                     else
-                        check_word(accepted, tile, len);
+                        check_word(accepted, base_addr, tile, len);
                     accepted = accepted + 1;
                 end else if (weight_valid && !weight_ready) begin
                     held_valid = 1'b1;
@@ -210,9 +219,13 @@ module tb_weight_feeder;
         end
     endtask
 
-    task automatic run_bad_cfg(input integer tile, input integer len);
+    task automatic run_bad_cfg(
+        input integer base_addr,
+        input integer tile,
+        input integer len
+    );
         begin
-            pulse_start(tile, len);
+            pulse_start(base_addr, tile, len);
             if (!cfg_error)
                 fail("cfg_error did not pulse for invalid geometry");
             if (!ready)
@@ -250,30 +263,32 @@ module tb_weight_feeder;
         repeat (2) @(posedge clk);
 
         phase = "T_WF_FULL_RATE";
-        run_tile(2, 12, 0, 1'b1);
+        run_tile(3, 2, 12, 0, 1'b1);
 
         phase = "T_WF_BP_1";
-        run_tile(1, 9, 1, 1'b0);
+        run_tile(0, 1, 9, 1, 1'b0);
 
         phase = "T_WF_BP_2";
-        run_tile(3, 7, 2, 1'b0);
+        run_tile(2, 3, 7, 2, 1'b0);
 
         phase = "T_WF_BP_MANY";
-        run_tile(4, 6, 9, 1'b0);
+        run_tile(1, 4, 6, 9, 1'b0);
 
         // No reset between these commands: different tile_idx and k_len prove
         // that base address and length restart at each accepted start.
         phase = "T_WF_CONSEC_A";
-        run_tile(1, 11, 0, 1'b1);
+        run_tile(0, 1, 11, 0, 1'b1);
         phase = "T_WF_CONSEC_B";
-        run_tile(5, 5, 2, 1'b0);
+        run_tile(4, 5, 5, 2, 1'b0);
 
         phase = "T_WF_ERR_ZERO";
-        run_bad_cfg(0, 0);
+        run_bad_cfg(0, 0, 0);
         phase = "T_WF_ERR_KMAX";
-        run_bad_cfg(0, K_MAX+1);
+        run_bad_cfg(0, 0, K_MAX+1);
         phase = "T_WF_ERR_DEPTH";
-        run_bad_cfg(7, 10);
+        run_bad_cfg(0, 7, 10);
+        phase = "T_WF_ERR_BASE_DEPTH";
+        run_bad_cfg(10, 5, 10);
 
         if (errors == 0)
             $display("PASS tb_weight_feeder");
@@ -329,6 +344,7 @@ module tb_weight_feeder_init;
     logic [DATA_WIDTH-1:0] wr_data = '0;
     logic start = 1'b0;
     logic ready;
+    logic [ADDR_W-1:0] base = '0;
     logic [TILE_W-1:0] tile_idx = '0;
     logic [K_W-1:0] k_len = '0;
     logic weight_valid;
@@ -363,6 +379,7 @@ module tb_weight_feeder_init;
         .wr_data      (wr_data),
         .start        (start),
         .ready        (ready),
+        .base         (base),
         .tile_idx     (tile_idx),
         .k_len        (k_len),
         .weight_valid (weight_valid),
