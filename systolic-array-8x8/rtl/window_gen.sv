@@ -599,10 +599,16 @@ module window_gen #(
         end
     end
 
+    // Not checked in ST_DONE: the counters keep the finished frame's final
+    // values there while the geometry latch already follows the ports, so a
+    // legal idle reconfiguration to a smaller kernel/channel count would trip
+    // it.  Every other state holds counters of the latched geometry (restart
+    // and each new row zero them).
     property p_kernel_counters_in_range;
         @(posedge clk) disable iff (!rst_n)
-        (ci_count <= last_ci_q) && (kh_count <= last_kh_q) &&
-        (kw_count <= last_kw_q) && (k_count <= last_k_q);
+        (state != ST_DONE) |->
+        ((ci_count <= last_ci_q) && (kh_count <= last_kh_q) &&
+         (kw_count <= last_kw_q) && (k_count <= last_k_q));
     endproperty
     a_kernel_counters_in_range: assert property (p_kernel_counters_in_range);
 

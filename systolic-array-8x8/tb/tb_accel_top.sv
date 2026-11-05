@@ -1,6 +1,9 @@
 `timescale 1ns/1ps
 
 // T_ACCEL_CTRL_001: AXI configuration through a bit-exact conv1 frame.
+// faz4: register writes while busy only touch the shadow image, a second
+// START after SOFT_RESET reruns the frame bit-exact, and geometry/tile
+// changes act only after COMMIT.
 module tb_accel_top;
     localparam int FRAME_BEATS = 384;
     localparam int OUT_BEATS = 784;
@@ -31,7 +34,7 @@ module tb_accel_top;
     logic [5:0] shift_mem [0:7];
     logic relu_mem [0:7];
     logic [7:0] weight_mem [0:K_LEN-1];
-    int errors = 0, out_seen = 0, cyc = 0;
+    int errors = 0, out_seen = 0, cyc = 0, exact_frames = 0;
     int expected_stall_in = 0, expected_stall_out = 0;
     bit checking = 0, busy_seen = 0, done_seen = 0;
     string path;
@@ -88,7 +91,7 @@ module tb_accel_top;
             if (s_valid && !s_ready) expected_stall_in++;
             if (m_valid && !m_ready) expected_stall_out++;
             if (dut.busy) busy_seen = 1;
-            if (dut.layer_done) done_seen = 1;
+            if (dut.pass_done) done_seen = 1;
             if (checking && m_valid && m_ready) begin
                 if (out_seen >= OUT_BEATS) begin
                     check(0, "extra output beat");
@@ -99,6 +102,7 @@ module tb_accel_top;
                         errors++;
                     end
                     check(m_lane_valid == 8'h3F, "lane mask");
+                    check(m_last == (out_seen == OUT_BEATS-1), "m_last position");
                     check((m_ovf_flat & m_lane_valid) == 0, "overflow");
                     out_seen++;
                 end
@@ -125,6 +129,14 @@ module tb_accel_top;
             end
         end
         @(negedge clk); w_wr_en = 0;
+    endtask
+
+    task automatic write_params;
+        for (int r = 0; r < 8; r++) begin
+            axi_write(12'(12'h040 + 16*r), bias_mem[r]);
+            axi_write(12'(12'h044 + 16*r), {14'b0,m0_mem[r]});
+            axi_write(12'(12'h048 + 16*r), {23'b0,relu_mem[r],2'b0,shift_mem[r]});
+        end
     endtask
 
     task automatic feed_frame;
@@ -157,11 +169,8 @@ module tb_accel_top;
         axi_write(12'h01C, 32'h0000_0000); // weight-bank base=0
         // tile_idx=0, tile_count=1, last_rows=6
         axi_write(12'h014, 32'h0018_0100);
-        for (int r = 0; r < 8; r++) begin
-            axi_write(12'(12'h040 + 16*r), bias_mem[r]);
-            axi_write(12'(12'h044 + 16*r), {14'b0,m0_mem[r]});
-            axi_write(12'(12'h048 + 16*r), {23'b0,relu_mem[r],2'b0,shift_mem[r]});
-        end
+        axi_write(12'h020, 32'h0000_0004); // DP_CFG: s_* -> no pool -> m_*
+        write_params();
         axi_read(12'h0C4, value);
         check(value[23:0] == 24'hFFFFFF && !value[24], "written_mask before commit");
         axi_write(12'h0C0, 1);
@@ -173,17 +182,39 @@ module tb_accel_top;
         check(dut.cfg_active_rows == 6, "last-tile active rows");
         load_weights();
 
+        // Frame 1.  While it runs, rewrite every shadow register the pass
+        // depends on (W_BASE=1 would read undefined weight words) and try a
+        // COMMIT and a LAYER_SWAP: the running pass must stay bit-exact.
         checking = 1;
         axi_write(12'h004, 1);
         fork
             feed_frame();
         join_none
+        wait (out_seen >= 100);
+        axi_write(12'h010, 32'h36E0_DA03);
+        axi_write(12'h014, 32'h0008_0201);
+        axi_write(12'h01C, 32'h0000_0001);
+        axi_write(12'h020, 32'h0000_0003);
+        write_params();
+        axi_write(12'h0C0, 1);
+        axi_write(12'h004, 8);
+        check(dut.cfg_out_w == 28 && dut.cfg_w_base == 0 && dut.cfg_dst_sel &&
+              !dut.cfg_src_sel && dut.cfg_active_rows == 6,
+              "busy shadow writes changed the active image");
+        axi_read(12'h00C, value);
+        check(value[7:0] == 8'h08, "busy COMMIT/LAYER_SWAP sets ERROR[3] only");
+        axi_read(12'h01C, value);
+        check(value == 1, "W_BASE readback is the shadow");
+        check(out_seen < OUT_BEATS, "busy writes finished after the frame");
         for (int guard = 0; guard < 500000 && out_seen < OUT_BEATS; guard++)
             @(negedge clk);
+        repeat (20) @(negedge clk);
         check(out_seen == OUT_BEATS, "frame output timeout");
         check(busy_seen, "BUSY never rose");
-        check(done_seen, "layer_done pulse missing");
+        check(done_seen, "pass_done pulse missing");
+        if (out_seen == OUT_BEATS) exact_frames++;
         checking = 0;
+        axi_write(12'h00C, 32'hFF);
         axi_read(12'h008, value);
         check(!value[1] && value[2] && !value[4], "BUSY/DONE/TABLE_VALID status");
         axi_write(12'h008, 4);
@@ -201,24 +232,75 @@ module tb_accel_top;
         axi_read(12'h108, value); check(value == 0, "STALL_OUT clear");
         axi_read(12'h10C, value); check(value == 0, "FRAME_COUNT clear");
 
-        // Only out_W changes.  A second start must be rejected before it
-        // reaches the terminal window generator or the layer controller.
+        // Frames 2 and 3: same active image, no new COMMIT; frame 2 follows
+        // SOFT_RESET, frame 3 follows frame 2 directly, so only the restart
+        // pulse can take the window generator out of its done state.
+        for (int f = 2; f <= 3; f++) begin
+            out_seen = 0; busy_seen = 0; done_seen = 0;
+            checking = 1;
+            axi_write(12'h004, 1);
+            fork
+                feed_frame();
+            join_none
+            for (int guard = 0; guard < 500000 && out_seen < OUT_BEATS; guard++)
+                @(negedge clk);
+            repeat (20) @(negedge clk);
+            check(out_seen == OUT_BEATS, $sformatf("frame %0d output timeout", f));
+            check(busy_seen && done_seen, $sformatf("frame %0d BUSY/DONE", f));
+            checking = 0;
+            if (out_seen == OUT_BEATS) exact_frames++;
+            axi_read(12'h10C, value);
+            check(value == f - 1, $sformatf("FRAME_COUNT after frame %0d", f));
+            axi_read(12'h00C, value);
+            check(value[7:0] == 8'h00, $sformatf("frame %0d ERROR", f));
+        end
+
+        // Shadow writes without COMMIT leave the active geometry alone.
+        out_seen = 0;
         axi_write(12'h010, 32'h36E0_DA03);
+        axi_read(12'h010, value);
+        check(value == 32'h36E0_DA03, "LAYER_CFG shadow readback");
+        check(dut.cfg_out_w == 28 && dut.cfg_in_w == 32,
+              "uncommitted LAYER_CFG changed the active geometry");
+
+        // A committed out_H=0, and kh=1 with pad=1, are rejected at START
+        // (window_gen parity) before they reach the generator.
+        axi_write(12'h010, 32'h3800_DA03); // out_H=0
+        write_params();
+        axi_write(12'h0C0, 1);
         axi_write(12'h004, 1);
         repeat (4) @(negedge clk);
         axi_read(12'h00C, value);
-        check(value[7:0] == 8'h80, "geometry mismatch ERROR[7] only");
+        check(value[7:0] == 8'h80, "out_H=0 ERROR[7] only");
         axi_read(12'h008, value);
-        check(!value[1], "geometry mismatch started frame");
-        check(out_seen == OUT_BEATS, "geometry mismatch emitted output");
+        check(!value[1], "out_H=0 started a frame");
+        axi_write(12'h00C, 32'hFF);
+        axi_write(12'h010, 32'h0822_B203); // kh=1, kw=3, pad=1, out 4x4
+        write_params();
+        axi_write(12'h0C0, 1);
+        axi_write(12'h004, 1);
+        repeat (4) @(negedge clk);
+        axi_read(12'h00C, value);
+        check(value[7:0] == 8'h80, "pad>=kh ERROR[7] only");
+        axi_read(12'h008, value);
+        check(!value[1], "pad>=kh started a frame");
+        check(out_seen == 0, "rejected geometry emitted output");
 
         // last_rows=2 makes a 10-channel layer expressible as tiles 8+2.
+        // TILE_CFG acts only after COMMIT.  The active tile is still the
+        // final-tile image written while busy and committed above (2 rows).
         axi_write(12'h014, 32'h0008_0200); // first of two tiles
+        check(dut.cfg_active_rows == 2, "uncommitted TILE_CFG changed active rows");
+        write_params();
+        axi_write(12'h0C0, 1);
         check(dut.cfg_active_rows == 8, "non-final tile active rows");
         axi_write(12'h014, 32'h0008_0201); // final tile
+        write_params();
+        axi_write(12'h0C0, 1);
         check(dut.cfg_active_rows == 2, "final tile active rows");
 
-        if (errors == 0) $display("PASS tb_accel_top: %0d bit-exact beats", out_seen);
+        if (errors == 0) $display("PASS tb_accel_top: %0d bit-exact frames of %0d beats",
+                                    exact_frames, OUT_BEATS);
         else $display("FAIL tb_accel_top: %0d errors", errors);
         $finish;
     end
