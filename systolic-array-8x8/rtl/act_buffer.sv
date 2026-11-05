@@ -1,29 +1,65 @@
 `timescale 1ns/1ps
 
-// Requant beat to padded [c_tile][h][w][lane] storage. Configuration is
-// sampled during the two setup cycles before a frame; hold it through in_last.
+// Layer activation ping-pong buffer (faz4 contract, section 3).
+//
+// Storage stays tile-major (ADR-018): one 64-bit word = 8 channels of one
+// pixel of one output-channel tile, at mem[tile*plane + row*w + col] with
+// plane = h*w.  A write pass stores one tile plane in raster order.  A read
+// pass replays the whole stored layer as an HWC stream, per pixel in raster
+// order the T tile words of that pixel:
+//   for row, for col, for t: word = mem[t*plane + row*w + col]
+// so byte lane r of the t-th word of a pixel is channel 8t+r and the byte
+// stream is HWC with c_phys = 8*T, which is what window_gen consumes (K1).
+//
+// Two banks: the write side fills bank buf_sel while the read side streams
+// the other bank, concurrently.  layer_swap (both sides idle) exchanges the
+// banks and hands the read side the geometry of the last completed write
+// pass.  Products (plane, base, footprint) are formed once in a two-cycle
+// write setup with wr_ready low; the per-beat paths only add and compare.
+//
+// Read latency: the bank read is synchronous, so issued words land one cycle
+// later in a 3-entry output FIFO.  A read is issued while FIFO entries plus
+// the word in flight are below 3, which depends on registers only (rd_ready
+// does not reach the BRAM enable) and still sustains one word per cycle at
+// rd_ready=1.
+//
+// Errors are sticky until soft_reset/rst_n and never block later commands:
+//   seq_error: wr_start/rd_start while that side is busy; layer_swap while
+//              either side is busy or together with a start; rd_start with no
+//              written layer swapped in; wr_start with h or w 0 or above max,
+//              tiles 0 or above C_TILE_MAX, or tile >= tiles.
+//   ovf_error: wr_start whose layer footprint tiles*h*w exceeds DEPTH (the
+//              whole layer must be readable back, not just this pass).
+// A rejected wr_start writes nothing and leaves the write side idle, so a
+// producer waiting on wr_ready stalls until soft_reset.  soft_reset returns
+// both FSMs to idle and clears the errors; memory, bank select, frame_count
+// and the stored geometries are kept, so a layer can be replayed after it.
 module act_buffer #(
     parameter int LANES = 8,
     parameter int OUT_H_MAX = 48,
     parameter int OUT_W_MAX = 48,
-    parameter int C_TILE_MAX = 4,
-    parameter int DEPTH = 4608,
-    parameter int COL_W = 4
+    parameter int C_TILE_MAX = 16,
+    parameter int DEPTH = 4608
 ) (
     input  logic clk, rst_n,
-    input  logic [$clog2(OUT_H_MAX+1)-1:0] cfg_out_h,
-    input  logic [$clog2(OUT_W_MAX+1)-1:0] cfg_out_w,
-    input  logic [$clog2(C_TILE_MAX+1)-1:0] cfg_c_tile,
-    input  logic in_valid,
-    output logic in_ready,
-    input  logic [LANES*8-1:0] in_y_flat,
-    input  logic [LANES-1:0] in_lane_valid,
-    input  logic [COL_W-1:0] in_col,
-    input  logic in_last,
-    input  logic rd_en,
-    input  logic [$clog2(DEPTH)-1:0] rd_addr,
+    input  logic soft_reset,
+    input  logic wr_start,
+    input  logic [$clog2(OUT_H_MAX+1)-1:0] cfg_wr_h,
+    input  logic [$clog2(OUT_W_MAX+1)-1:0] cfg_wr_w,
+    input  logic [$clog2(C_TILE_MAX+1)-1:0] cfg_wr_tile,
+    input  logic [$clog2(C_TILE_MAX+1)-1:0] cfg_wr_tiles,
+    input  logic wr_valid,
+    output logic wr_ready,
+    input  logic [LANES*8-1:0] wr_data,
+    output logic wr_done,
+    input  logic layer_swap,
+    input  logic rd_start,
     output logic rd_valid,
+    input  logic rd_ready,
     output logic [LANES*8-1:0] rd_data,
+    output logic rd_last,
+    output logic rd_busy,
+    output logic wr_busy,
     output logic buf_sel,
     output logic [31:0] frame_count,
     output logic seq_error,
@@ -31,104 +67,201 @@ module act_buffer #(
 );
     localparam int H_W = $clog2(OUT_H_MAX+1);
     localparam int W_W = $clog2(OUT_W_MAX+1);
-    localparam int A_W = $clog2(C_TILE_MAX*OUT_H_MAX*OUT_W_MAX+1);
-    typedef enum logic [1:0] {INIT_AREA, INIT_BASE, RUN} state_t;
-    state_t state;
-    logic [H_W-1:0] h;
-    logic [W_W-1:0] tile_x;
-    logic [COL_W-1:0] col;
-    logic [A_W-1:0] plane_area, word_ptr;
-    logic [LANES*8-1:0] write_word;
-    logic accept, write_fire, last_position, bad_beat;
-    logic [1:0] bank_read;
+    localparam int CT_W = $clog2(C_TILE_MAX+1);
+    localparam int PL_W = H_W + W_W;        // h*w of any representable h, w
+    localparam int FP_W = PL_W + CT_W;      // tile*plane, tiles*plane
+    localparam int A_W = $clog2(DEPTH+1);   // word pointers and counts
+
+    // Write side.
+    typedef enum logic [1:0] {W_IDLE, W_BASE, W_CHECK, W_RUN} wstate_t;
+    wstate_t wstate;
+    logic [CT_W-1:0] wr_tile_q, wr_tiles_q;
+    logic [PL_W-1:0] wr_plane;
+    logic [FP_W-1:0] wr_base, wr_foot;
+    logic wr_cfg_bad, wr_fire, wr_have;
+    logic [A_W-1:0] wr_ptr, wr_end;
+    // Geometry of the last completed write pass, handed over at layer_swap.
+    logic [A_W-1:0] lw_plane;
+    logic [CT_W-1:0] lw_tiles_m1;
+
+    // Read side.
+    logic rd_run, rd_have, rd_issue, rd_issue_last, rd_pop, swap_ok;
+    logic [A_W-1:0] rd_plane, rd_plane_m1, rd_pix, rd_addr;
+    logic [CT_W-1:0] rd_tiles_m1, rd_t;
+    logic q_vld, q_last;
     logic [LANES*8-1:0] bank_q [0:1];
-    logic [W_W:0] absolute_col;
+    logic [LANES*8-1:0] q_data, f_data0, f_data1, f_data2;
+    logic [2:0] f_last;
+    logic [1:0] f_cnt, f_wr, f_rd;
 
-    assign absolute_col = {1'b0,tile_x} + col;
-    assign last_position = (h == cfg_out_h-1'b1) &&
-                           (absolute_col == cfg_out_w-1'b1);
-    assign in_ready = (state == RUN) && !seq_error && !ovf_error;
-    assign accept = in_valid && in_ready;
-    assign bad_beat = (in_col != col) || (in_last != last_position) ||
-                      (cfg_out_h == 0) || (cfg_out_w == 0) ||
-                      (cfg_out_h > OUT_H_MAX) || (cfg_out_w > OUT_W_MAX) ||
-                      (cfg_c_tile >= C_TILE_MAX);
-    assign write_fire = accept && !bad_beat && (word_ptr < DEPTH);
+    assign wr_ready = (wstate == W_RUN);
+    assign wr_fire = wr_valid && wr_ready;
+    assign wr_busy = (wstate != W_IDLE);
+    assign rd_busy = rd_run || q_vld || (f_cnt != 2'd0);
+    assign swap_ok = layer_swap && !wr_busy && !rd_busy && !wr_start && !rd_start;
 
-    genvar r;
-    generate for (r=0; r<LANES; r=r+1) begin : g_mask
-        assign write_word[r*8 +: 8] = in_lane_valid[r] ? in_y_flat[r*8 +: 8] : 8'b0;
-    end endgenerate
+    assign rd_issue = rd_run && ({1'b0,f_cnt} + q_vld < 3'd3);
+    assign rd_issue_last = (rd_pix == rd_plane_m1) && (rd_t == rd_tiles_m1);
+    assign rd_valid = (f_cnt != 2'd0);
+    assign rd_pop = rd_valid && rd_ready;
+    assign q_data = buf_sel ? bank_q[0] : bank_q[1];
+    assign rd_data = (f_rd == 2'd0) ? f_data0 : (f_rd == 2'd1) ? f_data1 : f_data2;
+    assign rd_last = rd_valid && f_last[f_rd];   // f_last is not reset
 
-    // Two independent one-dimensional arrays. Each 784x64 array uses block
-    // RAM efficiently; line_buffer's 60-70-entry byte banks use LUTRAM instead.
-    // Each array has one aligned 64-bit write and one synchronous read port.
+    // Two independent one-dimensional arrays, one aligned 64-bit write port
+    // and one synchronous read port each.  Bank buf_sel is written, the other
+    // is read.  A 2-D array here once silently became flip-flops.
     genvar b;
     generate for (b=0; b<2; b=b+1) begin : g_buffer
         (* ram_style = "block" *) logic [LANES*8-1:0] mem [0:DEPTH-1];
         always_ff @(posedge clk) begin
-            if (write_fire && buf_sel == b[0]) mem[word_ptr] <= write_word;
-            if (rd_en && buf_sel != b[0] && rd_addr < DEPTH)
-                bank_q[b] <= mem[rd_addr];
+            if (wr_fire && buf_sel == b[0]) mem[wr_ptr] <= wr_data;
+            if (rd_issue && buf_sel != b[0]) bank_q[b] <= mem[rd_addr];
         end
     end endgenerate
 
+    // FIFO payload needs no reset: f_cnt says which entries are live.
+    always_ff @(posedge clk) begin
+        if (q_vld) begin
+            if (f_wr == 2'd0) f_data0 <= q_data;
+            if (f_wr == 2'd1) f_data1 <= q_data;
+            if (f_wr == 2'd2) f_data2 <= q_data;
+            f_last[f_wr] <= q_last;
+        end
+    end
+
     always_ff @(posedge clk) begin
         if (!rst_n) begin
-            state <= INIT_AREA;
-            plane_area <= '0;
-            word_ptr <= '0;
-            h <= '0;
-            tile_x <= '0;
-            col <= '0;
+            wstate <= W_IDLE;
+            wr_tile_q <= '0;
+            wr_tiles_q <= '0;
+            wr_plane <= '0;
+            wr_base <= '0;
+            wr_foot <= '0;
+            wr_cfg_bad <= 1'b0;
+            wr_ptr <= '0;
+            wr_end <= '0;
+            wr_done <= 1'b0;
+            wr_have <= 1'b0;
+            lw_plane <= '0;
+            lw_tiles_m1 <= '0;
+            rd_run <= 1'b0;
+            rd_have <= 1'b0;
+            rd_plane <= '0;
+            rd_plane_m1 <= '0;
+            rd_tiles_m1 <= '0;
+            rd_pix <= '0;
+            rd_addr <= '0;
+            rd_t <= '0;
+            q_vld <= 1'b0;
+            q_last <= 1'b0;
+            f_cnt <= '0;
+            f_wr <= '0;
+            f_rd <= '0;
             buf_sel <= 1'b0;
             frame_count <= '0;
             seq_error <= 1'b0;
             ovf_error <= 1'b0;
-            rd_valid <= 1'b0;
-            bank_read <= '0;
+        end else if (soft_reset) begin
+            wstate <= W_IDLE;
+            wr_done <= 1'b0;
+            rd_run <= 1'b0;
+            q_vld <= 1'b0;
+            q_last <= 1'b0;
+            f_cnt <= '0;
+            f_wr <= '0;
+            f_rd <= '0;
+            seq_error <= 1'b0;
+            ovf_error <= 1'b0;
         end else begin
-            rd_valid <= rd_en && (rd_addr < DEPTH);
-            if (rd_en) bank_read <= {1'b0,~buf_sel};
-            case (state)
-                INIT_AREA: begin
-                    plane_area <= cfg_out_h * cfg_out_w;
-                    state <= INIT_BASE;
+            wr_done <= 1'b0;
+            if ((wr_start && wr_busy) || (rd_start && rd_busy) ||
+                (rd_start && !rd_busy && !rd_have) || (layer_swap && !swap_ok))
+                seq_error <= 1'b1;
+
+            // Write pass: latch, multiply, check, then h*w words to base+i.
+            case (wstate)
+                W_IDLE: if (wr_start) begin
+                    wr_tile_q <= cfg_wr_tile;
+                    wr_tiles_q <= cfg_wr_tiles;
+                    wr_plane <= cfg_wr_h * cfg_wr_w;
+                    wr_cfg_bad <= (cfg_wr_h == 0) || (cfg_wr_h > OUT_H_MAX) ||
+                                  (cfg_wr_w == 0) || (cfg_wr_w > OUT_W_MAX) ||
+                                  (cfg_wr_tiles == 0) || (cfg_wr_tiles > C_TILE_MAX) ||
+                                  (cfg_wr_tile >= cfg_wr_tiles);
+                    wstate <= W_BASE;
                 end
-                INIT_BASE: begin
-                    word_ptr <= plane_area * cfg_c_tile;
-                    h <= '0;
-                    tile_x <= '0;
-                    col <= '0;
-                    state <= RUN;
+                W_BASE: begin
+                    wr_base <= wr_tile_q * wr_plane;
+                    wr_foot <= wr_tiles_q * wr_plane;
+                    wstate <= W_CHECK;
                 end
-                RUN: if (accept) begin
-                    if (bad_beat) seq_error <= 1'b1;
-                    else if (word_ptr >= DEPTH) ovf_error <= 1'b1;
-                    else begin
-                        word_ptr <= word_ptr + 1'b1;
-                        if (in_last) begin
-                            buf_sel <= ~buf_sel;
-                            frame_count <= frame_count + 1'b1;
-                            state <= INIT_AREA;
-                        end else if (absolute_col == cfg_out_w-1'b1) begin
-                            h <= h + 1'b1;
-                            tile_x <= '0;
-                            col <= '0;
-                        end else if (col == COL_W'(7)) begin
-                            tile_x <= tile_x + W_W'(8);
-                            col <= '0;
-                        end else col <= col + 1'b1;
+                W_CHECK: begin
+                    if (wr_cfg_bad) begin
+                        seq_error <= 1'b1;
+                        wstate <= W_IDLE;
+                    end else if (wr_foot > DEPTH) begin
+                        ovf_error <= 1'b1;
+                        wstate <= W_IDLE;
+                    end else begin
+                        wr_ptr <= A_W'(wr_base);
+                        wr_end <= A_W'(wr_base + wr_plane - 1'b1);
+                        wstate <= W_RUN;
                     end
                 end
-                default: state <= INIT_AREA;
+                W_RUN: if (wr_fire) begin
+                    wr_ptr <= wr_ptr + 1'b1;
+                    if (wr_ptr == wr_end) begin
+                        wr_done <= 1'b1;
+                        wr_have <= 1'b1;
+                        lw_plane <= A_W'(wr_plane);
+                        lw_tiles_m1 <= wr_tiles_q - 1'b1;
+                        wstate <= W_IDLE;
+                    end
+                end
+                default: wstate <= W_IDLE;
             endcase
+
+            if (swap_ok) begin
+                buf_sel <= ~buf_sel;
+                frame_count <= frame_count + 1'b1;
+                rd_have <= wr_have;
+                rd_plane <= lw_plane;
+                rd_plane_m1 <= lw_plane - 1'b1;
+                rd_tiles_m1 <= lw_tiles_m1;
+            end
+
+            // Read issue: pixel pointer plus a tile offset that accumulates
+            // plane; the next pixel restarts at its own address.
+            if (rd_start && !rd_busy) begin
+                if (rd_have) begin
+                    rd_run <= 1'b1;
+                    rd_pix <= '0;
+                    rd_addr <= '0;
+                    rd_t <= '0;
+                end
+            end else if (rd_issue) begin
+                if (rd_issue_last) rd_run <= 1'b0;
+                else if (rd_t == rd_tiles_m1) begin
+                    rd_t <= '0;
+                    rd_pix <= rd_pix + 1'b1;
+                    rd_addr <= rd_pix + 1'b1;
+                end else begin
+                    rd_t <= rd_t + 1'b1;
+                    rd_addr <= rd_addr + rd_plane;
+                end
+            end
+            q_vld <= rd_issue;
+            q_last <= rd_issue && rd_issue_last;
+
+            if (q_vld) f_wr <= (f_wr == 2'd2) ? 2'd0 : f_wr + 1'b1;
+            if (rd_pop) f_rd <= (f_rd == 2'd2) ? 2'd0 : f_rd + 1'b1;
+            f_cnt <= f_cnt + q_vld - rd_pop;
         end
     end
-    assign rd_data = bank_q[bank_read[0]];
 
     initial begin
-        if (LANES != 8 || COL_W < 3 || DEPTH < 1)
-            $error("act_buffer requires LANES=8, COL_W>=3, DEPTH>=1");
+        if (LANES != 8 || DEPTH < 1 || C_TILE_MAX < 1)
+            $error("act_buffer requires LANES=8, DEPTH>=1, C_TILE_MAX>=1");
     end
 endmodule
