@@ -24,7 +24,7 @@ module tb_axi_lite_regs;
     logic busy, done, table_valid;
     logic [31:0] cycle_count, stall_in, stall_out, frame_count;
     logic [7:0] hw_error_set;
-    logic start, soft_reset, counter_clear, cfg_commit;
+    logic start, soft_reset, counter_clear, cfg_commit, layer_swap;
     logic signed [31:0] cfg_bias_q [0:7];
     logic signed [17:0] cfg_m0 [0:7];
     logic [5:0] cfg_shift_n [0:7];
@@ -39,12 +39,14 @@ module tb_axi_lite_regs;
     logic cfg_param_src;
     logic [15:0] cfg_k_len;
     logic [15:0] cfg_w_base;
+    logic cfg_src_sel, cfg_pool_en, cfg_dst_sel;
 
     integer errors = 0;
     integer start_seen = 0;
     integer soft_seen = 0;
     integer clear_seen = 0;
     integer commit_seen = 0;
+    integer swap_seen = 0;
     integer i;
 
     always #5 clk = ~clk;
@@ -63,7 +65,7 @@ module tb_axi_lite_regs;
         .stall_out(stall_out), .frame_count(frame_count),
         .table_valid(table_valid), .hw_error_set(hw_error_set),
         .start(start), .soft_reset(soft_reset), .counter_clear(counter_clear),
-        .cfg_commit(cfg_commit),
+        .cfg_commit(cfg_commit), .layer_swap(layer_swap),
         .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
         .cfg_shift_n(cfg_shift_n), .cfg_relu(cfg_relu),
         .cfg_bypass(cfg_bypass), .cfg_c_in(cfg_c_in), .cfg_c_phys(cfg_c_phys),
@@ -72,7 +74,8 @@ module tb_axi_lite_regs;
         .cfg_out_h(cfg_out_h), .cfg_out_w(cfg_out_w),
         .cfg_tile_idx(cfg_tile_idx), .cfg_tile_count(cfg_tile_count),
         .cfg_last_rows(cfg_last_rows), .cfg_param_src(cfg_param_src),
-        .cfg_k_len(cfg_k_len)
+        .cfg_k_len(cfg_k_len), .cfg_src_sel(cfg_src_sel),
+        .cfg_pool_en(cfg_pool_en), .cfg_dst_sel(cfg_dst_sel)
     );
 
     always @(posedge clk) begin
@@ -81,6 +84,7 @@ module tb_axi_lite_regs;
             if (soft_reset) soft_seen = soft_seen + 1;
             if (counter_clear) clear_seen = clear_seen + 1;
             if (cfg_commit) commit_seen = commit_seen + 1;
+            if (layer_swap) swap_seen = swap_seen + 1;
         end
     end
 
@@ -221,31 +225,38 @@ module tb_axi_lite_regs;
         rst_n = 1'b1;
 
         axi_read(12'h000, 2, value);
-        check(value == 32'h0001_0002, "VERSION mismatch");
+        check(value == 32'h0001_0003, "VERSION mismatch");
         axi_read(12'h008, 1, value);
         check(value[0] && !value[1] && !value[2] && !value[3],
               "reset STATUS mismatch");
         axi_write(12'h010, 32'hB8E0_DA03, 4'hF, 1'b1, 0, 0);
         axi_read(12'h010, 0, value);
         check(value == 32'h38E0_DA03, "LAYER_CFG reserved bit was not masked");
-        check(cfg_c_in == 3 && cfg_kh == 5 && cfg_kw == 5 &&
-              cfg_stride == 1 && cfg_pad == 0 &&
-              cfg_out_h == 28 && cfg_out_w == 28,
-              "LAYER_CFG decoded fields mismatch");
+        check(cfg_c_in == 0 && cfg_kh == 0 && cfg_kw == 0 &&
+              cfg_stride == 0 && cfg_pad == 0 &&
+              cfg_out_h == 0 && cfg_out_w == 0,
+              "LAYER_CFG shadow write changed active geometry");
         check(cfg_k_len == 0, "k_len changed before commit");
         axi_write(12'h018, 32'hFFFF_FE03, 4'hF, 1'b0, 1, 0);
         axi_read(12'h018, 0, value);
-        check(value == 32'h0000_0003 && cfg_c_phys == 3,
-              "LAYER_CFG2 RAZ/WI or decode mismatch");
+        check(value == 32'h0000_0003 && cfg_c_phys == 0,
+              "LAYER_CFG2 RAZ/WI or shadow isolation mismatch");
         axi_write(12'h01C, 32'hABCD_0123, 4'hF, 1'b1, 0, 0);
         axi_read(12'h01C, 0, value);
-        check(value == 32'h0000_0123 && cfg_w_base == 16'h0123,
-              "W_BASE RAZ/WI or decode mismatch");
+        check(value == 32'h0000_0123 && cfg_w_base == 16'h0,
+              "W_BASE RAZ/WI or shadow isolation mismatch");
         axi_write(12'h014, 32'h001A_0103, 4'hF, 1'b1, 0, 0);
-        check(cfg_tile_idx == 3 && cfg_tile_count == 1 && cfg_param_src &&
-              cfg_last_rows == 6,
-              "TILE_CFG decoded fields mismatch");
+        axi_read(12'h014, 0, value);
+        check(value == 32'h001A_0103 && cfg_tile_idx == 0 &&
+              cfg_tile_count == 0 && !cfg_param_src && cfg_last_rows == 0,
+              "TILE_CFG readback or shadow isolation mismatch");
         axi_write(12'h014, 32'h0, 4'hF, 1'b1, 0, 0);
+        axi_write(12'h020, 32'hFFFF_FFFD, 4'hF, 1'b0, 1, 0);
+        axi_read(12'h020, 0, value);
+        check(value == 32'h0000_0005,
+              "DP_CFG reserved bits were not RAZ/WI");
+        check(!cfg_src_sel && !cfg_pool_en && !cfg_dst_sel,
+              "DP_CFG shadow write changed active outputs");
 
         // START is rejected before the first commit and is self-clearing.
         axi_write(12'h004, 32'h1, 4'h1, 1'b1, 3, 2);
@@ -292,6 +303,24 @@ module tb_axi_lite_regs;
         // commit itself is refused.
         busy = 1'b1;
         axi_write(12'h040, 32'hCAFE_0000, 4'hF, 1'b1, 4, 2);
+        axi_write(12'h010, 32'h1A72_B604, 4'hF, 1'b0, 1, 0);
+        axi_write(12'h014, 32'h0015_0402, 4'hF, 1'b1, 0, 0);
+        axi_write(12'h018, 32'hFFFF_FE08, 4'hF, 1'b0, 1, 0);
+        axi_write(12'h01C, 32'hABCD_4567, 4'hF, 1'b1, 0, 0);
+        axi_write(12'h020, 32'hFFFF_FFFB, 4'hF, 1'b0, 1, 0);
+        axi_read(12'h010, 0, value);
+        check(value == 32'h1A72_B604, "BUSY LAYER_CFG shadow readback mismatch");
+        axi_read(12'h014, 0, value);
+        check(value == 32'h0015_0402, "BUSY TILE_CFG shadow readback mismatch");
+        axi_read(12'h018, 0, value);
+        check(value == 32'h0000_0008, "BUSY LAYER_CFG2 shadow readback mismatch");
+        axi_read(12'h01C, 0, value);
+        check(value == 32'h0000_4567, "BUSY W_BASE shadow readback mismatch");
+        axi_read(12'h020, 0, value);
+        check(value == 32'h0000_0003, "BUSY DP_CFG shadow readback mismatch");
+        check(cfg_c_in == 0 && cfg_c_phys == 0 && cfg_tile_idx == 0 &&
+              cfg_w_base == 0 && !cfg_src_sel && !cfg_pool_en && !cfg_dst_sel,
+              "BUSY shadow writes changed the active configuration");
         axi_write(12'h0C0, 32'h1, 4'h1, 1'b0, 1, 1);
         check_error_bit(3, "BUSY commit did not set ERR_CFG_WR_BUSY");
         axi_read(12'h040, 1, value);
@@ -305,10 +334,18 @@ module tb_axi_lite_regs;
         axi_write(12'h0C0, 32'h1, 4'h1, 1'b0, 2, 1);
         axi_read(12'h0C4, 1, value);
         check(value[24] && value[23:0] == 24'h0, "valid commit status mismatch");
-        check(cfg_k_len == 75, "registered k_len mismatch after commit");
+        check(cfg_k_len == 36, "registered k_len mismatch after commit");
         check(commit_seen == 1, "successful commit pulse mismatch");
-        check(cfg_c_phys == 3 && cfg_w_base == 16'h0123,
+        check(cfg_c_in == 4 && cfg_kh == 3 && cfg_kw == 3 &&
+              cfg_stride == 1 && cfg_pad == 1 &&
+              cfg_out_h == 14 && cfg_out_w == 13,
+              "committed LAYER_CFG outputs mismatch");
+        check(cfg_c_phys == 8 && cfg_w_base == 16'h4567 &&
+              cfg_tile_idx == 2 && cfg_tile_count == 4 && cfg_bypass &&
+              !cfg_param_src && cfg_last_rows == 5,
               "committed geometry extension outputs mismatch");
+        check(cfg_src_sel && cfg_pool_en && !cfg_dst_sel,
+              "committed DP_CFG outputs mismatch");
         for (i = 0; i < 8; i = i + 1) begin
             axi_read(12'h040 + i*16, 0, value);
             if (i == 0)
@@ -337,26 +374,57 @@ module tb_axi_lite_regs;
         axi_read(12'h004, 1, value);
         check(value[1:0] == 2'b00, "SOFT_RESET did not self-clear");
 
-        // Runtime convolution stride is fixed at one.  A non-one shadow
-        // value must refuse START and reuse the geometry/parameter error bit.
-        axi_write(12'h010, 32'h38E1_5A03, 4'hF, 1'b0, 0, 0);
+        // LAYER_SWAP is a pulse when idle and uses the command-while-busy
+        // error when rejected.
+        axi_write(12'h004, 32'h8, 4'h1, 1'b0, 1, 0);
+        check(swap_seen == 1, "idle LAYER_SWAP was not emitted");
+        axi_read(12'h004, 0, value);
+        check(!value[3], "LAYER_SWAP was readable as a level");
+        busy = 1'b1;
+        axi_write(12'h004, 32'h8, 4'h1, 1'b1, 0, 0);
+        check(swap_seen == 1, "BUSY LAYER_SWAP was emitted");
+        check_error_bit(3, "BUSY LAYER_SWAP did not set ERR_CFG_WR_BUSY");
+        busy = 1'b0;
+        clear_errors();
+
+        // A shadow stride change cannot affect START until it is committed.
+        // Once committed, the fixed-stride guard uses that active value.
+        axi_write(12'h010, 32'h1A73_3604, 4'hF, 1'b0, 0, 0);
+        axi_read(12'h010, 0, value);
+        check(value == 32'h1A73_3604 && cfg_stride == 1,
+              "stride shadow write leaked into the active image");
         axi_write(12'h004, 32'h1, 4'h1, 1'b1, 0, 0);
-        check(start_seen == 1, "stride!=1 START was emitted");
+        check(start_seen == 2, "active stride=1 START was not emitted");
+        write_shadow_set(1'b0, 1);
+        axi_write(12'h0C0, 32'h1, 4'h1, 1'b1, 0, 0);
+        check(commit_seen == 2 && cfg_stride == 2,
+              "stride shadow image did not become active at COMMIT");
+        axi_write(12'h004, 32'h1, 4'h1, 1'b1, 0, 0);
+        check(start_seen == 2, "active stride!=1 START was emitted");
         check_error_bit(7, "stride!=1 START did not set ERR_PARAM_INCOMPLETE");
         clear_errors();
-        axi_write(12'h010, 32'h38E0_DA03, 4'hF, 1'b1, 0, 0);
 
         // PARAM_SRC=1 has a separate table-valid guard.  STATUS[4] exposes
         // the condition, while the normative ERR_PARAM_INCOMPLETE bit is
         // reused for the refused start.
-        axi_write(12'h014, 32'h0002_0000, 4'hF, 1'b1, 0, 0);
+        axi_write(12'h010, 32'h1A72_B604, 4'hF, 1'b1, 0, 0);
+        axi_write(12'h014, 32'h0017_0402, 4'hF, 1'b1, 0, 0);
+        write_shadow_set(1'b1, 0);
+        axi_write(12'h0C0, 32'h1, 4'h1, 1'b0, 1, 0);
+        check(commit_seen == 3 && cfg_stride == 1 && cfg_param_src,
+              "PARAM_SRC shadow image did not become active at COMMIT");
         axi_read(12'h008, 1, value);
         check(!value[4], "TABLE_VALID unexpectedly asserted");
         axi_write(12'h004, 32'h1, 4'h1, 1'b1, 1, 0);
-        check(start_seen == 1, "table-invalid START was emitted");
+        check(start_seen == 2, "table-invalid START was emitted");
         check_error_bit(7, "table-invalid START did not set ERR_PARAM_INCOMPLETE");
         clear_errors();
-        axi_write(12'h014, 32'h0, 4'hF, 1'b0, 2, 1);
+        table_valid = 1'b1;
+        axi_read(12'h008, 0, value);
+        check(value[4], "TABLE_VALID status did not assert");
+        axi_write(12'h004, 32'h1, 4'h1, 1'b0, 2, 1);
+        check(start_seen == 3, "table-valid START was not emitted");
+        table_valid = 1'b0;
 
         // DONE and every ERROR bit are W1C.  Holding the hardware event high
         // through the write exercises the set-and-clear-same-cycle rule.
@@ -377,7 +445,7 @@ module tb_axi_lite_regs;
         check(value[7:0] == 8'h0, "all ERROR bits did not clear");
 
         // Unmapped reads complete and return zero even with delayed RREADY.
-        axi_read(12'h020, 5, value);
+        axi_read(12'h024, 5, value);
         check(value == 32'h0, "unmapped read did not return zero");
 
         // Reset in the middle of an AW-only transaction must discard it and
