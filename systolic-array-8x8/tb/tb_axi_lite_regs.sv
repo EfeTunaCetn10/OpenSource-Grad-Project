@@ -24,6 +24,8 @@ module tb_axi_lite_regs;
     logic busy, done, table_valid;
     logic [31:0] cycle_count, stall_in, stall_out, frame_count;
     logic [7:0] hw_error_set;
+    logic [15:0] err_detail_set;
+    logic pass_aborted;
     logic start, soft_reset, counter_clear, cfg_commit, layer_swap;
     logic signed [31:0] cfg_bias_q [0:7];
     logic signed [17:0] cfg_m0 [0:7];
@@ -64,6 +66,7 @@ module tb_axi_lite_regs;
         .cycle_count(cycle_count), .stall_in(stall_in),
         .stall_out(stall_out), .frame_count(frame_count),
         .table_valid(table_valid), .hw_error_set(hw_error_set),
+        .err_detail_set(err_detail_set), .pass_aborted(pass_aborted),
         .start(start), .soft_reset(soft_reset), .counter_clear(counter_clear),
         .cfg_commit(cfg_commit), .layer_swap(layer_swap),
         .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
@@ -218,6 +221,8 @@ module tb_axi_lite_regs;
         stall_out = 32'd9;
         frame_count = 32'd11;
         hw_error_set = 8'h0;
+        err_detail_set = 16'h0;
+        pass_aborted = 1'b0;
 
         repeat (2) @(posedge clk);
         #1;
@@ -225,10 +230,12 @@ module tb_axi_lite_regs;
         rst_n = 1'b1;
 
         axi_read(12'h000, 2, value);
-        check(value == 32'h0001_0003, "VERSION mismatch");
+        check(value == 32'h0001_0004, "VERSION mismatch");
         axi_read(12'h008, 1, value);
-        check(value[0] && !value[1] && !value[2] && !value[3],
+        check(value[0] && !value[1] && !value[2] && !value[3] && !value[5],
               "reset STATUS mismatch");
+        axi_read(12'h024, 0, value);
+        check(value == 32'h0, "reset ERR_DETAIL mismatch");
         axi_write(12'h010, 32'hB8E0_DA03, 4'hF, 1'b1, 0, 0);
         axi_read(12'h010, 0, value);
         check(value == 32'h38E0_DA03, "LAYER_CFG reserved bit was not masked");
@@ -444,8 +451,100 @@ module tb_axi_lite_regs;
         axi_read(12'h00C, 1, value);
         check(value[7:0] == 8'h0, "all ERROR bits did not clear");
 
+        // ERR_DETAIL: sticky set, byte-lane W1C, RAZ/WI above bit 15.
+        @(negedge clk);
+        err_detail_set = 16'hA5A5;
+        @(negedge clk);
+        err_detail_set = 16'h0;
+        axi_read(12'h024, 1, value);
+        check(value == 32'h0000_A5A5, "ERR_DETAIL did not latch the event");
+        axi_read(12'h024, 0, value);
+        check(value == 32'h0000_A5A5, "ERR_DETAIL was not sticky");
+        axi_write(12'h024, 32'hFFFF_FF0F, 4'h1, 1'b1, 0, 0);
+        axi_read(12'h024, 0, value);
+        check(value == 32'h0000_A5A0, "ERR_DETAIL low-byte W1C mismatch");
+        axi_write(12'h024, 32'hFFFF_0000, 4'hC, 1'b0, 1, 0);
+        axi_write(12'h024, 32'h0000_0000, 4'hF, 1'b1, 0, 0);
+        axi_read(12'h024, 0, value);
+        check(value == 32'h0000_A5A0, "ERR_DETAIL reserved/zero write changed state");
+        axi_write(12'h024, 32'h0000_2500, 4'h2, 1'b0, 0, 0);
+        axi_read(12'h024, 0, value);
+        check(value == 32'h0000_80A0, "ERR_DETAIL high-byte W1C mismatch");
+        axi_write(12'h024, 32'hFFFF_FFFF, 4'hF, 1'b1, 0, 0);
+        axi_read(12'h024, 1, value);
+        check(value == 32'h0, "ERR_DETAIL full W1C did not clear");
+        // Hardware wins over a W1C in the same cycle; other bits still clear.
+        err_detail_set = 16'h8001;
+        @(negedge clk);
+        err_detail_set = 16'h0300;
+        fork
+            axi_write(12'h024, 32'h0000_FFFF, 4'h3, 1'b0, 3, 2);
+            begin
+                // Drop the event right after the write-complete edge so only
+                // that cycle's hardware set can keep the bits.
+                wait (dut.write_complete === 1'b1);
+                @(posedge clk);
+                #1 err_detail_set = 16'h0;
+            end
+        join
+        axi_read(12'h024, 0, value);
+        check(value == 32'h0000_0300, "ERR_DETAIL set-and-clear race mismatch");
+        // SOFT_RESET clears every detail bit; ERROR is untouched.
+        @(negedge clk);
+        err_detail_set = 16'hF000;
+        @(negedge clk);
+        err_detail_set = 16'h0;
+        hw_error_set = 8'h10;
+        @(negedge clk);
+        hw_error_set = 8'h0;
+        axi_write(12'h004, 32'h2, 4'h1, 1'b1, 0, 0);
+        axi_read(12'h024, 1, value);
+        check(value == 32'h0, "SOFT_RESET did not clear ERR_DETAIL");
+        axi_read(12'h00C, 0, value);
+        check(value[7:0] == 8'h10, "SOFT_RESET changed ERROR");
+        clear_errors();
+
+        // STATUS.ABORTED: set by the pass_aborted pulse, cleared by a DONE
+        // W1C or by an accepted START (the active image has PARAM_SRC=1, so
+        // START needs table_valid).
+        table_valid = 1'b1;
+        @(negedge clk);
+        pass_aborted = 1'b1;
+        @(negedge clk);
+        pass_aborted = 1'b0;
+        axi_read(12'h008, 1, value);
+        check(value[5] && !value[2], "ABORTED was not set by pass_aborted");
+        axi_write(12'h00C, 32'hFF, 4'h1, 1'b0, 0, 0);
+        axi_write(12'h024, 32'hFFFF, 4'h3, 1'b0, 0, 0);
+        axi_read(12'h008, 0, value);
+        check(value[5], "ABORTED was cleared by ERROR/ERR_DETAIL W1C");
+        pass_aborted = 1'b1;
+        axi_write(12'h008, 32'h4, 4'h1, 1'b1, 0, 0);
+        pass_aborted = 1'b0;
+        axi_read(12'h008, 1, value);
+        check(value[5], "pass_aborted lost to a same-cycle DONE W1C");
+        axi_write(12'h008, 32'h4, 4'h1, 1'b0, 0, 0);
+        axi_read(12'h008, 0, value);
+        check(!value[5], "DONE W1C did not clear ABORTED");
+        // Next START clears it; a rejected START and CONTROL without START do not.
+        @(negedge clk);
+        pass_aborted = 1'b1;
+        @(negedge clk);
+        pass_aborted = 1'b0;
+        axi_write(12'h004, 32'h4, 4'h1, 1'b1, 0, 0);
+        busy = 1'b1;
+        axi_write(12'h004, 32'h1, 4'h1, 1'b1, 0, 0);
+        busy = 1'b0;
+        axi_read(12'h008, 0, value);
+        check(value[5], "ABORTED cleared without an accepted START");
+        axi_write(12'h004, 32'h1, 4'h1, 1'b0, 0, 0);
+        axi_read(12'h008, 0, value);
+        check(!value[5] && start_seen == 4, "START did not clear ABORTED");
+        table_valid = 1'b0;
+        clear_errors();
+
         // Unmapped reads complete and return zero even with delayed RREADY.
-        axi_read(12'h024, 5, value);
+        axi_read(12'h028, 5, value);
         check(value == 32'h0, "unmapped read did not return zero");
 
         // Reset in the middle of an AW-only transaction must discard it and

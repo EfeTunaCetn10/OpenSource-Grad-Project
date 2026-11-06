@@ -2,12 +2,12 @@
 
 // Hand-written AXI4-Lite register file for the Stage 1 control plane.
 //
-// Register map v3 (reserved bits are RAZ/WI):
+// Register map v4 (reserved bits are RAZ/WI):
 //   0x000 VERSION      [31:16] RTL, [15:0] register-map version
 //   0x004 CONTROL      [0] START W1P, [1] SOFT_RESET W1P, [2] IRQ_EN,
 //                      [3] LAYER_SWAP W1P
 //   0x008 STATUS       [0] IDLE, [1] BUSY, [2] DONE W1C, [3] ERROR,
-//                      [4] TABLE_VALID
+//                      [4] TABLE_VALID, [5] ABORTED
 //   0x00C ERROR        [7:0] sticky error bits, W1C
 //   0x010 LAYER_CFG    [8:0] C_IN, [11:9] KH, [14:12] KW,
 //                      [16:15] STRIDE, [18:17] PAD, [24:19] OUT_H,
@@ -17,11 +17,18 @@
 //   0x018 LAYER_CFG2   [8:0] C_PHYS
 //   0x01C W_BASE       [15:0] weight base address
 //   0x020 DP_CFG       [0] SRC_SEL, [1] POOL_EN, [2] DST_SEL
+//   0x024 ERR_DETAIL   [15:0] sticky error-source bits, W1C, cleared by
+//                      SOFT_RESET (see err_detail_set)
 //   0x040..0x0BC       eight 16-byte parameter banks: BIAS_Q, M0,
 //                      SHIFT_N/RELU, reserved
 //   0x0C0 COMMIT       [0] commit W1P
 //   0x0C4 PARAM_STATUS [23:0] written mask, [24] committed
 //   0x100..0x10C       CYCLE_COUNT, STALL_IN, STALL_OUT, FRAME_COUNT
+//
+// STATUS.ABORTED is set by a pass_aborted pulse (a pass ended by an error)
+// and cleared by a W1C of DONE (STATUS[2]) or by the next accepted START.
+// ERR_DETAIL is read-only apart from W1C; hardware set wins over a same-cycle
+// W1C, as for ERROR.
 //
 // Geometry, tile, datapath, weight-base, and parameter registers are split
 // into shadow and active storage.  A successful COMMIT is the only operation
@@ -66,6 +73,10 @@ module axi_lite_regs #(
     // generated in this block; this input carries datapath-originated error
     // events and is useful for the W1C contract.
     input  logic [7:0]            hw_error_set,
+    // Sticky ERR_DETAIL source bits, ORed in every cycle.
+    input  logic [15:0]           err_detail_set,
+    // One-cycle pulse: the pass was ended by an error (sets STATUS.ABORTED).
+    input  logic                  pass_aborted,
 
     // One-cycle control events.  START, SOFT_RESET, and LAYER_SWAP are never
     // readable as level bits; these pulses are the consumer-facing side of
@@ -106,7 +117,7 @@ module axi_lite_regs #(
     // Version fields are intentionally local to this block so a map change
     // cannot be made without leaving a visible software version trace.
     localparam logic [15:0] RTL_VERSION    = 16'h0001;
-    localparam logic [15:0] REGMAP_VERSION = 16'h0003;
+    localparam logic [15:0] REGMAP_VERSION = 16'h0004;
 
     localparam logic [ADDR_W-1:0] A_VERSION      = 12'h000;
     localparam logic [ADDR_W-1:0] A_CONTROL      = 12'h004;
@@ -117,6 +128,7 @@ module axi_lite_regs #(
     localparam logic [ADDR_W-1:0] A_LAYER_CFG2   = 12'h018;
     localparam logic [ADDR_W-1:0] A_W_BASE       = 12'h01C;
     localparam logic [ADDR_W-1:0] A_DP_CFG       = 12'h020;
+    localparam logic [ADDR_W-1:0] A_ERR_DETAIL   = 12'h024;
     localparam logic [ADDR_W-1:0] A_PARAM_BASE   = 12'h040;
     localparam logic [ADDR_W-1:0] A_PARAM_END    = 12'h0BC;
     localparam logic [ADDR_W-1:0] A_COMMIT       = 12'h0C0;
@@ -153,6 +165,8 @@ module axi_lite_regs #(
     logic        committed;
     logic        done_latched;
     logic [7:0]  error_latched;
+    logic [15:0] err_detail_latched;
+    logic        aborted_latched;
 
     logic        aw_hold;
     logic [ADDR_W-1:0] awaddr_hold;
@@ -172,6 +186,7 @@ module axi_lite_regs #(
 
     logic [7:0]  error_set_this_cycle;
     logic [7:0]  error_w1c_mask;
+    logic [15:0] err_detail_w1c_mask;
     logic        done_w1c;
     logic        commit_accept;
     logic        write_param;
@@ -254,9 +269,13 @@ module axi_lite_regs #(
                     // Extension required by the PARAM_SRC=1 start guard.
                     // It occupies a previously reserved status bit.
                     read_mux[4] = table_valid;
+                    read_mux[5] = aborted_latched;
                 end
                 A_ERROR: begin
                     read_mux[7:0] = error_latched;
+                end
+                A_ERR_DETAIL: begin
+                    read_mux[15:0] = err_detail_latched;
                 end
                 A_LAYER_CFG: begin
                     read_mux = {1'b0, shadow_layer_cfg};
@@ -334,6 +353,14 @@ module axi_lite_regs #(
         error_w1c_mask = 8'h00;
         if (write_complete && (write_addr == A_ERROR) && write_strb[0])
             error_w1c_mask = write_data[7:0];
+
+        err_detail_w1c_mask = 16'h0000;
+        if (write_complete && (write_addr == A_ERR_DETAIL)) begin
+            if (write_strb[0])
+                err_detail_w1c_mask[7:0] = write_data[7:0];
+            if (write_strb[1])
+                err_detail_w1c_mask[15:8] = write_data[15:8];
+        end
 
         done_w1c = write_complete && (write_addr == A_STATUS) &&
                    write_strb[0] && write_data[2];
@@ -422,6 +449,8 @@ module axi_lite_regs #(
             committed <= 1'b0;
             done_latched <= 1'b0;
             error_latched <= 8'h0;
+            err_detail_latched <= 16'h0;
+            aborted_latched <= 1'b0;
             aw_hold <= 1'b0;
             awaddr_hold <= '0;
             w_hold <= 1'b0;
@@ -459,6 +488,12 @@ module axi_lite_regs #(
             done_latched <= (done_latched && !done_w1c) || done;
             error_latched <= (error_latched & ~error_w1c_mask) |
                              error_set_this_cycle;
+            // SOFT_RESET clears every detail bit; a same-cycle hardware
+            // event still wins.
+            err_detail_latched <= (err_detail_latched &
+                                   ~(err_detail_w1c_mask |
+                                     {16{soft_reset}})) | err_detail_set;
+            aborted_latched <= (aborted_latched && !done_w1c) || pass_aborted;
 
             if (aw_take) begin
                 aw_hold <= 1'b1;
@@ -505,8 +540,10 @@ module axi_lite_regs #(
                             irq_en <= write_data[2];
                             if (write_data[0] && !busy &&
                                 (active_tile_cfg[17] ? table_valid : committed) &&
-                                (cfg_stride == 2'd1))
+                                (cfg_stride == 2'd1)) begin
                                 start <= 1'b1;
+                                aborted_latched <= pass_aborted;
+                            end
                             if (write_data[1]) begin
                                 soft_reset <= 1'b1;
                                 counter_clear <= 1'b1;
