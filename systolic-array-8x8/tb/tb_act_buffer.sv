@@ -14,6 +14,9 @@
 // and rd_ready, rd_ready=1 throughput, a write of the next layer during a
 // read, tiles=1 and a 48x48x2 layer filling DEPTH exactly, busy-command and
 // configuration errors, soft_reset in the middle of a read and of a write.
+// Layer completeness: swap without any write, with a tile missing, after an
+// aborted pass, mixed geometry inside a layer, tile rewrite; rd_geom_* after
+// every swap and unchanged by rejected swaps and soft_reset.
 // The vectors under ../vectors are not used: the reference is in this file.
 module tb_act_buffer;
     localparam int MAXW = 4608;
@@ -28,6 +31,12 @@ module tb_act_buffer;
     logic [63:0] rd_data;
     logic rd_busy, wr_busy, buf_sel, seq_error, ovf_error;
     logic [31:0] frame_count;
+    logic rd_geom_valid;
+    logic [5:0] rd_geom_h, rd_geom_w;
+    logic [4:0] rd_geom_tiles;
+    // Expected rd_geom_*: what the last accepted swap handed over.
+    logic g_v=0;
+    integer g_h=0, g_w=0, g_t=0;
 
     act_buffer dut (.*);
 
@@ -187,10 +196,20 @@ module tb_act_buffer;
         for (k=0;k<T;k=k+1) write_pass(layer,H,W,order[k],T,rnd);
     endtask
 
-    task automatic swap(input logic want_sel, input integer want_fc);
+    task automatic check_geom(input string tag);
+        if (rd_geom_valid !== g_v || rd_geom_h !== g_h[5:0] || rd_geom_w !== g_w[5:0] ||
+            rd_geom_tiles !== g_t[4:0])
+            fail($sformatf("%s: rd_geom v=%b %0d x %0d x %0d, expected v=%b %0d x %0d x %0d",
+                           tag,rd_geom_valid,rd_geom_h,rd_geom_w,rd_geom_tiles,g_v,g_h,g_w,g_t));
+    endtask
+
+    task automatic swap(input logic want_sel, input integer want_fc,
+                        input integer H, input integer W, input integer T);
         pulse(layer_swap);
         if (buf_sel !== want_sel || frame_count !== want_fc || seq_error !== 0)
             fail($sformatf("swap: buf_sel=%b frame_count=%0d",buf_sel,frame_count));
+        g_v = 1; g_h = H; g_w = W; g_t = T;
+        check_geom("after swap");
     endtask
 
     // layer_swap while one side is busy: rejected, seq_error, then cleared.
@@ -201,6 +220,7 @@ module tb_act_buffer;
         pulse(layer_swap);
         if (seq_error !== 1 || buf_sel !== s || frame_count !== f)
             fail($sformatf("layer_swap while %s not rejected",tag));
+        check_geom({"rejected swap, ",tag});
     endtask
 
     // Read the whole stored layer (exp_words must hold its stream).
@@ -250,20 +270,40 @@ module tb_act_buffer;
     integer o2b [] = '{0,1};
     integer k;
 
+    // A pass started and killed by soft_reset after some words: sets no mask bit.
+    task automatic abort_pass(input integer H, input integer W, input integer tile,
+                              input integer T);
+        @(negedge clk);
+        cfg_wr_h = H; cfg_wr_w = W; cfg_wr_tile = tile; cfg_wr_tiles = T;
+        wr_start = 1;
+        @(negedge clk);
+        wr_start = 0; wr_valid = 1; wr_data = 64'h1111_2222_3333_4444;
+        repeat (5) @(negedge clk);
+        wr_valid = 0;
+        do_soft_reset();
+    endtask
+
     initial begin
         repeat (3) @(negedge clk);
         rst_n = 1;
         rd_mode = 1;
 
         // No layer swapped in yet.
+        check_geom("after reset");
         pulse(rd_start);
         @(negedge clk);
         if (seq_error !== 1 || rd_busy !== 0 || rd_valid !== 0) fail("rd_start with no layer");
         do_soft_reset();
 
+        // Swap with nothing written: rejected, nothing swapped in.
+        pulse(layer_swap);
+        if (seq_error !== 1 || frame_count !== 0 || buf_sel !== 0) fail("swap without any write");
+        check_geom("swap without any write");
+        do_soft_reset();
+
         // L0: 3 tiles of 5x7 written in order 0,2,1; swap; three replays.
         write_layer(0,5,7,3,o3,1);
-        swap(1,1);
+        swap(1,1,5,7,3);
         build_expected(0,5,7,3);
         read_layer(1,"L0 replay 1");
         read_layer(0,"L0 replay 2");
@@ -273,20 +313,20 @@ module tb_act_buffer;
             read_layer(2,"L0 replay 3");
             write_layer(1,3,3,4,o4,1);
         join
-        swap(0,2);
+        swap(0,2,3,3,4);
         build_expected(1,3,3,4);
         fork
             read_layer(1,"L1");
             write_layer(2,6,4,1,o1,1);
         join
-        swap(1,3);
+        swap(1,3,6,4,1);
         build_expected(2,6,4,1);
         read_layer(1,"L2 tiles=1");
         read_layer(0,"L2 tiles=1");
 
         // 48x48x2 fills DEPTH=4608 exactly.
         write_layer(3,48,48,2,o2,0);
-        swap(0,4);
+        swap(0,4,48,48,2);
         build_expected(3,48,48,2);
         read_layer(0,"L3 48x48x2");
 
@@ -307,7 +347,7 @@ module tb_act_buffer;
         if (seq_error !== 1 || ovf_error !== 0) fail("busy commands: flags");
         do_soft_reset();
         if (buf_sel !== 0 || frame_count !== 4) fail("soft_reset changed buf_sel/frame_count");
-        swap(1,5);
+        swap(1,5,6,6,2);
         build_expected(4,6,6,2);
         // Only the read side busy (write idle): the swap is still rejected.
         fork
@@ -329,6 +369,9 @@ module tb_act_buffer;
         bad_write(1,1,0,17,1,0,"tiles=17");
         write_pass(5,1,1,15,16,0);
         if (seq_error !== 0 || ovf_error !== 0) fail("tiles=C_TILE_MAX rejected");
+        // Tile 15 of 16 alone is not a layer.
+        swap_rejected("tiles 0..14 missing");
+        do_soft_reset();
 
         // soft_reset in the middle of a read: flush, then replay intact.
         rd_idx = 0; chk_en = 1; rd_mode = 1;
@@ -340,6 +383,13 @@ module tb_act_buffer;
         if (rd_valid !== 0) fail("soft_reset did not flush the read FIFO");
         chk_en = 0;
         read_layer(1,"L4 after soft_reset");
+
+        // L5: 16 tiles (C_TILE_MAX) of 1x1; tile 15 was written above, the
+        // mask survived soft_reset, so tiles 0..14 complete the layer.
+        for (k=0;k<15;k=k+1) write_pass(5,1,1,k,16,0);
+        swap(0,6,1,1,16);
+        build_expected(5,1,1,16);
+        read_layer(0,"L5 16 tiles");
 
         // soft_reset in the middle of a write, then a full layer still works.
         @(negedge clk);
@@ -363,14 +413,62 @@ module tb_act_buffer;
             end
         join
         do_soft_reset();
-        swap(0,6);
+        swap(1,7,2,3,2);
         build_expected(6,2,3,2);
         read_layer(1,"L6 after soft_reset");
         read_layer(0,"L6");
 
+        // Swap with no new write since the last swap: rejected, geometry kept.
+        pulse(layer_swap);
+        if (seq_error !== 1 || frame_count !== 7 || buf_sel !== 1) fail("swap without new write");
+        check_geom("swap without new write");
+        do_soft_reset();
+        check_geom("after soft_reset");
+
+        // L7: tile 1 of 3 missing; tile rewrite is allowed.
+        write_pass(7,4,4,0,3,0);
+        write_pass(7,4,4,2,3,0);
+        swap_rejected("tile 1 of 3 missing");
+        do_soft_reset();
+        write_pass(7,4,4,0,3,1);
+        swap_rejected("tile 1 of 3 still missing");
+        do_soft_reset();
+        write_pass(7,4,4,1,3,1);
+        swap(0,8,4,4,3);
+        build_expected(7,4,4,3);
+        read_layer(1,"L7 completed, tile rewritten");
+
+        // L8: a second pass with another h, w or tiles is rejected at wr_start
+        // (seq_error, nothing written) and does not touch the mask.
+        write_pass(8,3,3,0,2,0);
+        bad_write(3,4,1,2,1,0,"mixed w in layer");
+        bad_write(4,3,1,2,1,0,"mixed h in layer");
+        bad_write(3,3,1,3,1,0,"mixed tiles in layer");
+        swap_rejected("tile 1 of 2 missing after rejected passes");
+        do_soft_reset();
+        write_pass(8,3,3,1,2,0);
+        swap(1,9,3,3,2);
+        build_expected(8,3,3,2);
+        read_layer(0,"L8 after rejected mixed passes");
+        // The first pass of the next layer may have any geometry again.
+        write_pass(9,2,2,0,1,0);
+        swap(0,10,2,2,1);
+        build_expected(9,2,2,1);
+        read_layer(1,"L9 geometry free after swap");
+
+        // L10: a pass aborted by soft_reset sets no bit.
+        write_pass(10,2,2,0,2,0);
+        abort_pass(2,2,1,2);
+        swap_rejected("aborted pass");
+        do_soft_reset();
+        write_pass(10,2,2,1,2,0);
+        swap(1,11,2,2,2);
+        build_expected(10,2,2,2);
+        read_layer(1,"L10 after aborted pass");
+
         if (wr_done_cnt != passes) fail($sformatf("wr_done pulses %0d for %0d passes",wr_done_cnt,passes));
         if (errors==0)
-            $display("PASS: act_buffer HWC read of 6 layers, %0d write passes, replay, concurrent write, LFSR backpressure, errors, soft_reset",passes);
+            $display("PASS: act_buffer HWC read of 11 layers, %0d write passes, replay, concurrent write, LFSR backpressure, errors, soft_reset, swap completeness, mixed geometry, rd_geom",passes);
         else $display("FAIL: tb_act_buffer errors=%0d",errors);
         $finish;
     end

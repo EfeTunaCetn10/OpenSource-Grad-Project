@@ -23,17 +23,29 @@
 // does not reach the BRAM enable) and still sustains one word per cycle at
 // rd_ready=1.
 //
+// Layer completeness: per write layer (since the last accepted swap) a mask
+// records which tile passes COMPLETED (wr_done) and the first completed pass
+// fixes the layer geometry h, w, tiles.  A later pass of the same layer with a
+// different geometry is rejected at wr_start; layer_swap is accepted only if
+// the mask is exactly tiles 0..tiles-1 (rewriting a tile is fine).  An
+// accepted swap clears the mask.  A pass aborted by soft_reset sets no bit.
+// rd_geom_* is the geometry rd_start will stream, changed only by an accepted
+// swap; rd_geom_valid says a complete layer has been swapped in.
+//
 // Errors are sticky until soft_reset/rst_n and never block later commands:
 //   seq_error: wr_start/rd_start while that side is busy; layer_swap while
 //              either side is busy or together with a start; rd_start with no
-//              written layer swapped in; wr_start with h or w 0 or above max,
-//              tiles 0 or above C_TILE_MAX, or tile >= tiles.
+//              written layer swapped in; layer_swap with an incomplete or empty
+//              write layer; wr_start with h or w 0 or above max, tiles 0 or
+//              above C_TILE_MAX, tile >= tiles, or a geometry different from
+//              the completed passes of the same layer.
 //   ovf_error: wr_start whose layer footprint tiles*h*w exceeds DEPTH (the
 //              whole layer must be readable back, not just this pass).
 // A rejected wr_start writes nothing and leaves the write side idle, so a
 // producer waiting on wr_ready stalls until soft_reset.  soft_reset returns
 // both FSMs to idle and clears the errors; memory, bank select, frame_count
-// and the stored geometries are kept, so a layer can be replayed after it.
+// the stored geometries and the completion mask are kept, so a layer can be
+// replayed after it and a half-written layer is finished by the next passes.
 module act_buffer #(
     parameter int LANES = 8,
     parameter int OUT_H_MAX = 48,
@@ -63,7 +75,11 @@ module act_buffer #(
     output logic buf_sel,
     output logic [31:0] frame_count,
     output logic seq_error,
-    output logic ovf_error
+    output logic ovf_error,
+    output logic rd_geom_valid,
+    output logic [$clog2(OUT_H_MAX+1)-1:0] rd_geom_h,
+    output logic [$clog2(OUT_W_MAX+1)-1:0] rd_geom_w,
+    output logic [$clog2(C_TILE_MAX+1)-1:0] rd_geom_tiles
 );
     localparam int H_W = $clog2(OUT_H_MAX+1);
     localparam int W_W = $clog2(OUT_W_MAX+1);
@@ -76,11 +92,19 @@ module act_buffer #(
     typedef enum logic [1:0] {W_IDLE, W_BASE, W_CHECK, W_RUN} wstate_t;
     wstate_t wstate;
     logic [CT_W-1:0] wr_tile_q, wr_tiles_q;
+    logic [H_W-1:0] wr_h_q;
+    logic [W_W-1:0] wr_w_q;
     logic [PL_W-1:0] wr_plane;
     logic [FP_W-1:0] wr_base, wr_foot;
-    logic wr_cfg_bad, wr_fire, wr_have;
+    logic wr_cfg_bad, wr_geom_bad, wr_fire;
     logic [A_W-1:0] wr_ptr, wr_end;
-    // Geometry of the last completed write pass, handed over at layer_swap.
+    // Write layer so far: geometry of its completed passes (handed over at
+    // layer_swap), the mask of completed tiles and whether it is complete.
+    logic wl_have, wl_full;
+    logic [H_W-1:0] wl_h;
+    logic [W_W-1:0] wl_w;
+    logic [CT_W-1:0] wl_tiles;
+    logic [C_TILE_MAX-1:0] wl_mask, wl_mask_n;
     logic [A_W-1:0] lw_plane;
     logic [CT_W-1:0] lw_tiles_m1;
 
@@ -98,7 +122,13 @@ module act_buffer #(
     assign wr_fire = wr_valid && wr_ready;
     assign wr_busy = (wstate != W_IDLE);
     assign rd_busy = rd_run || q_vld || (f_cnt != 2'd0);
-    assign swap_ok = layer_swap && !wr_busy && !rd_busy && !wr_start && !rd_start;
+    assign swap_ok = layer_swap && !wr_busy && !rd_busy && !wr_start && !rd_start &&
+                     wl_full;
+    assign rd_geom_valid = rd_have;
+    // Mask after the pass that ends now; full = exactly tiles 0..tiles-1.
+    assign wl_mask_n = wl_mask | (C_TILE_MAX'(1) << wr_tile_q);
+    assign wr_geom_bad = wl_have && ((wr_h_q != wl_h) || (wr_w_q != wl_w) ||
+                                     (wr_tiles_q != wl_tiles));
 
     assign rd_issue = rd_run && ({1'b0,f_cnt} + q_vld < 3'd3);
     assign rd_issue_last = (rd_pix == rd_plane_m1) && (rd_t == rd_tiles_m1);
@@ -135,6 +165,8 @@ module act_buffer #(
             wstate <= W_IDLE;
             wr_tile_q <= '0;
             wr_tiles_q <= '0;
+            wr_h_q <= '0;
+            wr_w_q <= '0;
             wr_plane <= '0;
             wr_base <= '0;
             wr_foot <= '0;
@@ -142,11 +174,19 @@ module act_buffer #(
             wr_ptr <= '0;
             wr_end <= '0;
             wr_done <= 1'b0;
-            wr_have <= 1'b0;
+            wl_have <= 1'b0;
+            wl_full <= 1'b0;
+            wl_h <= '0;
+            wl_w <= '0;
+            wl_tiles <= '0;
+            wl_mask <= '0;
             lw_plane <= '0;
             lw_tiles_m1 <= '0;
             rd_run <= 1'b0;
             rd_have <= 1'b0;
+            rd_geom_h <= '0;
+            rd_geom_w <= '0;
+            rd_geom_tiles <= '0;
             rd_plane <= '0;
             rd_plane_m1 <= '0;
             rd_tiles_m1 <= '0;
@@ -184,6 +224,8 @@ module act_buffer #(
                 W_IDLE: if (wr_start) begin
                     wr_tile_q <= cfg_wr_tile;
                     wr_tiles_q <= cfg_wr_tiles;
+                    wr_h_q <= cfg_wr_h;
+                    wr_w_q <= cfg_wr_w;
                     wr_plane <= cfg_wr_h * cfg_wr_w;
                     wr_cfg_bad <= (cfg_wr_h == 0) || (cfg_wr_h > OUT_H_MAX) ||
                                   (cfg_wr_w == 0) || (cfg_wr_w > OUT_W_MAX) ||
@@ -197,7 +239,7 @@ module act_buffer #(
                     wstate <= W_CHECK;
                 end
                 W_CHECK: begin
-                    if (wr_cfg_bad) begin
+                    if (wr_cfg_bad || wr_geom_bad) begin
                         seq_error <= 1'b1;
                         wstate <= W_IDLE;
                     end else if (wr_foot > DEPTH) begin
@@ -213,7 +255,12 @@ module act_buffer #(
                     wr_ptr <= wr_ptr + 1'b1;
                     if (wr_ptr == wr_end) begin
                         wr_done <= 1'b1;
-                        wr_have <= 1'b1;
+                        wl_have <= 1'b1;
+                        wl_h <= wr_h_q;
+                        wl_w <= wr_w_q;
+                        wl_tiles <= wr_tiles_q;
+                        wl_mask <= wl_mask_n;
+                        wl_full <= (wl_mask_n == ((C_TILE_MAX'(1) << wr_tiles_q) - 1'b1));
                         lw_plane <= A_W'(wr_plane);
                         lw_tiles_m1 <= wr_tiles_q - 1'b1;
                         wstate <= W_IDLE;
@@ -225,7 +272,13 @@ module act_buffer #(
             if (swap_ok) begin
                 buf_sel <= ~buf_sel;
                 frame_count <= frame_count + 1'b1;
-                rd_have <= wr_have;
+                rd_have <= 1'b1;
+                rd_geom_h <= wl_h;
+                rd_geom_w <= wl_w;
+                rd_geom_tiles <= wl_tiles;
+                wl_have <= 1'b0;
+                wl_full <= 1'b0;
+                wl_mask <= '0;
                 rd_plane <= lw_plane;
                 rd_plane_m1 <= lw_plane - 1'b1;
                 rd_tiles_m1 <= lw_tiles_m1;
