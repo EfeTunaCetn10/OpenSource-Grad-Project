@@ -67,7 +67,9 @@ module accel_top #(
     parameter int W_DEPTH = 8192,
     parameter int ACT_DEPTH = 4608,   // act_buffer words per bank
     parameter int ADDR_W = 12,
-    parameter int WDOG_W = 16         // pass aborts after 2^WDOG_W-1 idle cycles
+    // Pass aborts after 2^WDOG_W-1 idle cycles.  24 bits = ~168 ms at 100 MHz,
+    // so PS-side latency before the DMA starts (PYNQ Python) is not a timeout.
+    parameter int WDOG_W = 24
 ) (
     input logic clk, rst_n,
     input logic [ADDR_W-1:0] s_axi_awaddr,
