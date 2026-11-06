@@ -4,6 +4,10 @@
 // faz4: register writes while busy only touch the shadow image, a second
 // START after SOFT_RESET reruns the frame bit-exact, and geometry/tile
 // changes act only after COMMIT.
+// faz4 L3: TLAST early (abort) / late (flag, extra beats refused), progress
+// watchdog (WDOG_W=10 here), abort followed by a good pass without
+// SOFT_RESET, non-integer s_* frame and act_buffer source geometry checks
+// at START, ERR_DETAIL and STATUS.ABORTED.
 module tb_accel_top;
     localparam int FRAME_BEATS = 384;
     localparam int OUT_BEATS = 784;
@@ -35,12 +39,14 @@ module tb_accel_top;
     logic relu_mem [0:7];
     logic [7:0] weight_mem [0:K_LEN-1];
     int errors = 0, out_seen = 0, cyc = 0, exact_frames = 0;
+    int aux_beats = 0, aux_last = 0, extra_taken = 0;
+    bit sink = 0, late_stop = 0;
     int expected_stall_in = 0, expected_stall_out = 0;
     bit checking = 0, busy_seen = 0, done_seen = 0;
     string path;
     logic [31:0] value;
 
-    accel_top dut (
+    accel_top #(.WDOG_W(10)) dut (
         .clk(clk), .rst_n(rst_n),
         .s_axi_awaddr(awaddr), .s_axi_awvalid(awvalid), .s_axi_awready(awready),
         .s_axi_wdata(wdata), .s_axi_wstrb(wstrb), .s_axi_wvalid(wvalid),
@@ -107,11 +113,15 @@ module tb_accel_top;
                     out_seen++;
                 end
             end
+            if (!checking && m_valid && m_ready) begin
+                aux_beats++;
+                if (m_last) aux_last++;
+            end
         end
     end
     // Deliberate output backpressure during the frame.
     always @(negedge clk) begin
-        if (!rst_n || !checking) m_ready = 0;
+        if (!rst_n || !checking) m_ready = rst_n && sink;
         else begin
             cyc++;
             m_ready = (cyc[1:0] != 0);
@@ -147,6 +157,85 @@ module tb_accel_top;
         end
         @(negedge clk); s_valid = 0; s_last = 0;
     endtask
+
+    // n beats of frame_mem with s_last on beat last_at (-1: never).
+    task automatic feed_beats(input int n, input int last_at);
+        for (int b = 0; b < n; b++) begin
+            @(negedge clk); s_valid = 1; s_data = frame_mem[b % FRAME_BEATS];
+            s_last = (b == last_at);
+            do @(posedge clk); while (!s_ready);
+        end
+        @(negedge clk); s_valid = 0; s_last = 0;
+    endtask
+
+    // A whole frame without s_last, then one more beat (with s_last) held
+    // valid until late_stop; extra_taken counts its handshakes.
+    task automatic feed_late;
+        feed_beats(FRAME_BEATS, -1);
+        @(negedge clk); s_valid = 1; s_data = frame_mem[0]; s_last = 1;
+        while (!late_stop) begin
+            @(posedge clk);
+            if (s_ready) extra_taken++;
+        end
+        @(negedge clk); s_valid = 0; s_last = 0;
+    endtask
+
+    // Full shadow image, then COMMIT.
+    task automatic commit_cfg(input logic [31:0] layer, c_phys, tile, dp);
+        axi_write(12'h010, layer);
+        axi_write(12'h018, c_phys);
+        axi_write(12'h01C, 32'h0);
+        axi_write(12'h014, tile);
+        axi_write(12'h020, dp);
+        write_params();
+        axi_write(12'h0C0, 1);
+    endtask
+
+    task automatic clear_status;
+        axi_write(12'h00C, 32'hFF);
+        axi_write(12'h024, 32'hFFFF);
+        axi_write(12'h008, 4);
+    endtask
+
+    // STATUS / ERROR / ERR_DETAIL against expectations.
+    task automatic expect_regs(input string tag, input bit busy_e, done_e, aborted_e,
+                               input logic [7:0] err_e, input logic [15:0] det_e);
+        logic [31:0] st, er, de;
+        axi_read(12'h008, st);
+        axi_read(12'h00C, er);
+        axi_read(12'h024, de);
+        if (st[1] !== busy_e || st[2] !== done_e || st[5] !== aborted_e ||
+            er[7:0] !== err_e || de[15:0] !== det_e) begin
+            $display("FAIL tb_accel_top: %s: STATUS=%08h ERROR=%02h ERR_DETAIL=%04h",
+                     tag, st, er[7:0], de[15:0]);
+            errors++;
+        end
+    endtask
+
+    task automatic wait_done(input int max_cycles);
+        for (int g = 0; g < max_cycles && !(dut.pass_done || dut.abort_q); g++)
+            @(negedge clk);
+        repeat (4) @(negedge clk);
+    endtask
+
+    // One conv1 frame on m_*, bit-exact (no COMMIT: the active image).
+    task automatic good_frame(input string tag);
+        out_seen = 0; busy_seen = 0; done_seen = 0;
+        checking = 1;
+        axi_write(12'h004, 1);
+        fork
+            feed_frame();
+        join_none
+        for (int guard = 0; guard < 500000 && out_seen < OUT_BEATS; guard++)
+            @(negedge clk);
+        repeat (20) @(negedge clk);
+        check(out_seen == OUT_BEATS, $sformatf("%s output timeout", tag));
+        check(busy_seen && done_seen, $sformatf("%s BUSY/DONE", tag));
+        checking = 0;
+        if (out_seen == OUT_BEATS) exact_frames++;
+    endtask
+
+    localparam logic [31:0] C1_LAYER = 32'h38E0_DA03, C1_TILE = 32'h0018_0100;
 
     initial begin
         awaddr = 0; awvalid = 0; wdata = 0; wstrb = 0; wvalid = 0;
@@ -253,6 +342,10 @@ module tb_accel_top;
             check(value == f - 1, $sformatf("FRAME_COUNT after frame %0d", f));
             axi_read(12'h00C, value);
             check(value[7:0] == 8'h00, $sformatf("frame %0d ERROR", f));
+            axi_read(12'h024, value);
+            check(value == 0, $sformatf("frame %0d ERR_DETAIL", f));
+            axi_read(12'h008, value);
+            check(!value[5], $sformatf("frame %0d ABORTED", f));
         end
 
         // Shadow writes without COMMIT leave the active geometry alone.
@@ -298,6 +391,148 @@ module tb_accel_top;
         write_params();
         axi_write(12'h0C0, 1);
         check(dut.cfg_active_rows == 2, "final tile active rows");
+
+        // ---------------- L3: abort, TLAST, watchdog ----------------
+        axi_read(12'h10C, value);
+        check(value == 2, "FRAME_COUNT before the L3 cases");
+        clear_status();
+        commit_cfg(C1_LAYER, 3, C1_TILE, 4);
+
+        // Short frame: s_last on beat 200 of 384 -> abort, ERROR[4] +
+        // ERR_DETAIL[13], DONE + ABORTED, BUSY low, FRAME_COUNT unchanged.
+        // Output beats before the abort are a correct prefix (scoreboard).
+        out_seen = 0; checking = 1;
+        axi_write(12'h004, 1);
+        feed_beats(200, 199);
+        repeat (20) @(negedge clk);
+        checking = 0;
+        check(out_seen < OUT_BEATS, "TLAST early: frame completed");
+        expect_regs("TLAST early abort", 0, 1, 1, 8'h10, 16'h2000);
+        axi_read(12'h10C, value);
+        check(value == 2, "TLAST early: aborted pass counted in FRAME_COUNT");
+        clear_status();
+        expect_regs("DONE W1C clears ABORTED", 0, 0, 0, 8'h00, 16'h0000);
+
+        // The next COMMIT+START runs a full exact frame, no SOFT_RESET.
+        commit_cfg(C1_LAYER, 3, C1_TILE, 4);
+        good_frame("after TLAST-early abort");
+        expect_regs("after TLAST-early abort", 0, 1, 0, 8'h00, 16'h0000);
+        clear_status();
+
+        // Long frame: no s_last on the last expected beat -> ERROR[5] +
+        // ERR_DETAIL[14], pass completes exact, not aborted; the extra beat
+        // is never accepted, during or after the pass.
+        extra_taken = 0; late_stop = 0;
+        out_seen = 0; busy_seen = 0; done_seen = 0; checking = 1;
+        axi_write(12'h004, 1);
+        fork
+            feed_late();
+        join_none
+        for (int guard = 0; guard < 500000 && out_seen < OUT_BEATS; guard++)
+            @(negedge clk);
+        repeat (50) @(negedge clk);
+        checking = 0;
+        check(out_seen == OUT_BEATS && done_seen, "TLAST late: frame incomplete");
+        if (out_seen == OUT_BEATS) exact_frames++;
+        expect_regs("TLAST late flag", 0, 1, 0, 8'h20, 16'h4000);
+        late_stop = 1;
+        repeat (4) @(negedge clk);
+        check(extra_taken == 0, "TLAST late: extra beat accepted");
+        clear_status();
+
+        // Watchdog: START with no source beat.  No abort at 900 idle cycles,
+        // abort (ERROR[6] + ERR_DETAIL[15]) before 1200; then START alone
+        // runs an exact frame.
+        axi_write(12'h004, 1);
+        repeat (900) @(negedge clk);
+        expect_regs("watchdog early", 1, 0, 0, 8'h00, 16'h0000);
+        repeat (300) @(negedge clk);
+        expect_regs("watchdog abort", 0, 1, 1, 8'h40, 16'h8000);
+        clear_status();
+        good_frame("after watchdog abort");
+        expect_regs("after watchdog abort", 0, 1, 0, 8'h00, 16'h0000);
+        clear_status();
+
+        // ---------------- L3: START checks ----------------
+        // 5x5x3 s_* input (75 bytes) is not a whole number of beats.
+        commit_cfg(32'h0618_B603, 3, 32'h0000_0100, 4); // c3 k3x3 pad0 out 3x3
+        axi_write(12'h004, 1);
+        repeat (8) @(negedge clk);
+        expect_regs("non-integer frame", 0, 0, 0, 8'h80, 16'h0000);
+        clear_status();
+
+        // act_buffer source with no layer swapped in yet.
+        commit_cfg(32'h0410_B603, 8, 32'h0000_0100, 5); // c3 k3x3 out 2x2, src->m_*
+        axi_write(12'h004, 1);
+        repeat (8) @(negedge clk);
+        expect_regs("source before any swap", 0, 0, 0, 8'h80, 16'h1000);
+        clear_status();
+
+        // Store a 4x4, 1-tile layer: 8x8x3 s_* frame (24 beats), k5, to
+        // act_buffer; then LAYER_SWAP.
+        commit_cfg(32'h0820_DA03, 3, C1_TILE, 0);
+        axi_write(12'h004, 1);
+        feed_beats(24, 23);
+        wait_done(20000);
+        expect_regs("4x4 store pass", 0, 1, 0, 8'h00, 16'h0000);
+        axi_write(12'h004, 8);
+        check(dut.ab_rd_geom_valid && dut.ab_rd_geom_h == 4 && dut.ab_rd_geom_w == 4 &&
+              dut.ab_rd_geom_tiles == 1, "rd_geom after swap");
+        clear_status();
+
+        // Mismatches: c_phys 16 (2 tiles), in_w 5, flattened c_phys 120.
+        commit_cfg(32'h0410_B603, 16, 32'h0000_0100, 5);
+        axi_write(12'h004, 1);
+        repeat (8) @(negedge clk);
+        expect_regs("source c_phys 16 vs 1 tile", 0, 0, 0, 8'h80, 16'h1000);
+        clear_status();
+        commit_cfg(32'h0610_B603, 8, 32'h0000_0100, 5);  // out 2x3 -> in 4x5
+        axi_write(12'h004, 1);
+        repeat (8) @(negedge clk);
+        expect_regs("source in_w 5 vs 4", 0, 0, 0, 8'h80, 16'h1000);
+        clear_status();
+        commit_cfg(32'h0208_9248, 120, 32'h0000_0100, 5); // 1x1 c72, out 1x1
+        axi_write(12'h004, 1);
+        repeat (8) @(negedge clk);
+        expect_regs("flattened c_phys 120 vs 128", 0, 0, 0, 8'h80, 16'h1000);
+        clear_status();
+
+        // Matches: same plane (in 4x4, c_phys 8) and flattened into 1x1
+        // (c_phys 128 = 8*1*4*4).  Both run to DONE on m_*.
+        sink = 1;
+        aux_beats = 0; aux_last = 0;
+        commit_cfg(32'h0410_B603, 8, 32'h0000_0100, 5);
+        axi_write(12'h004, 1);
+        wait_done(20000);
+        expect_regs("source 4x4 c_phys 8", 0, 1, 0, 8'h00, 16'h0000);
+        check(aux_beats == 4 && aux_last == 1, "source 4x4: 4 beats, one m_last");
+        clear_status();
+        aux_beats = 0; aux_last = 0;
+        commit_cfg(32'h0208_9248, 128, 32'h0000_0100, 5);
+        axi_write(12'h004, 1);
+        wait_done(20000);
+        expect_regs("source flattened c_phys 128", 0, 1, 0, 8'h00, 16'h0000);
+        check(aux_beats == 1 && aux_last == 1, "flattened: 1 beat, m_last");
+        clear_status();
+
+        // LAYER_SWAP and START in one CONTROL write: the check must see the
+        // layer the swap brings in.  Store 8x8x3 -> k5 -> 4x4 -> pool -> 2x2,
+        // then commit a 2x2 source pass (stale 4x4 would reject it).
+        commit_cfg(32'h0820_DA03, 3, C1_TILE, 2);
+        axi_write(12'h004, 1);
+        feed_beats(24, 23);
+        wait_done(20000);
+        expect_regs("2x2 pooled store pass", 0, 1, 0, 8'h00, 16'h0000);
+        clear_status();
+        aux_beats = 0; aux_last = 0;
+        commit_cfg(32'h0410_9203, 8, 32'h0000_0100, 5); // c3 k1x1 out 2x2
+        axi_write(12'h004, 9);
+        wait_done(20000);
+        expect_regs("SWAP+START one write", 0, 1, 0, 8'h00, 16'h0000);
+        check(aux_beats == 4 && aux_last == 1, "SWAP+START: 4 beats, one m_last");
+        sink = 0;
+        axi_read(12'h10C, value);
+        check(value == 10, $sformatf("FRAME_COUNT %0d, want 10 completed passes", value));
 
         if (errors == 0) $display("PASS tb_accel_top: %0d bit-exact frames of %0d beats",
                                     exact_frames, OUT_BEATS);
