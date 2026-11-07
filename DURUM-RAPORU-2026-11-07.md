@@ -130,3 +130,24 @@ accuracy Python'un INT8 accuracy'sine eşittir. Kartta ölçülen accuracy Kadem
 | `faz2-sim-e2e` @ `2985e8e` | LeNet-5 Kademe 1 (16/16), 9 Ekim |
 | `faz3-param` @ `71663f1` | Runtime geometri, 4 Kasım |
 | `faz4-datapath` | Bu rapor; tam katman datapath'i ve açıkların kapanması |
+
+---
+
+## 6. Güncelleme — 2026-11-08 (`faz5-test`)
+
+Dört paralel lane, orkestratör doğrulamasıyla:
+
+| Risk | Sonuç | Kanıt |
+|---|---|---|
+| **R2 tam v3 ağı** | **Kapandı (sentetik ağırlıkla).** `tb_v3_e2e`: 48×48 → conv1..conv5 → fc1 → fc2 → argmax, testbench PS rolünde yalnız AXI-Lite + akış portlarıyla; 2 görüntü, 54 pass, her katmanın act_buffer içeriği (4.696 word) + logit'ler saf Python'a karşı bit-exact; tahminler 3 ve 8 | regression |
+| **R3 timing** | `window_gen` handshake yolu kritik yoldan çıktı (redundant `gather_reg` temizlikleri kaldırıldı, hazırlık kontrolü bir cycle önce register'lanıyor). Route sonrası **WNS +0,899 / WHS +0,016 ns**, Default ve Explore stratejilerinde aynı. Yeni sınırlayıcı: `dp_rst_n` → requant reset fan-out'u (`max_fanout=64` denendi, +0,743'e kötüleştirdi, geri alındı) | orkestratör route koşusu |
+| **R5/R6 testler** | Smoke S1–S7 kalıcı regression'a alındı (`tb_sys_chain`, `tb_sys_faults`); yeni testler `tb_sys_bp` (T_AXI_BP_001), `tb_sys_ovf` (T_NUM_OVF_001); PASS satırlarında T_MEM_PINGPONG_001, T_NUM_CONV_001, T_RST_001. Tam eşleme: `TEST-MATRISI.md` | regression |
+| **R8/R9 belgeler** | ADR-016/014 INT8 logit düzeltmesi; ADR-019'a gerçek envelope eki (kabul Emin'de); Abstract/Roadmap'e güncel durum notu; ADR-008 senkron reset eki (vault) | — |
+
+**Regression:** temiz ağaçtan **21/21 PASS**; `smoke/run_smoke.sh` SMOKE PASS. Sentez +1,593 ns,
+LUT 8.715, FF 6.516, 48 RAMB36, 88 DSP. Toplam mutasyon: P1 1, P2 2, P3 8 — hepsi yakalandı.
+
+**Hâlâ açık:** R1 Kişi A artefaktları (not gönderilmedi) · R4 bitstream (DMA, BD, IP packaging) ·
+R7 PYNQ uyumu · `dp_rst_n` fan-out'u (+1,0 ns için reset'i requant veri register'larından
+kaldırmak) · ADR-019/014 kabul kararları · T_FC1_ORDER_001 one-hot ve koordinat kodlu
+T_AXI_LANE_001 testleri · kontrattaki "accumulator wrap" ifadesinin "acc+bias" olarak düzeltilmesi.
