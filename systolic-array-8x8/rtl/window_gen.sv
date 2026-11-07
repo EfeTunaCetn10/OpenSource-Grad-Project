@@ -303,14 +303,27 @@ module window_gen #(
     logic [TILE_X_W-1:0] remaining_cols;
     logic signed [ROW_COORD_W-1:0] out_base_row;
     logic signed [COL_COORD_W-1:0] tile_base_col;
-    logic signed [ROW_COORD_W-1:0] rows_written_coord;
     logic signed [ROW_COORD_W-1:0] kh_coord;
     logic signed [COL_COORD_W-1:0] kw_coord;
     logic signed [COL_COORD_W-1:0] lane_coord;
     logic signed [ROW_COORD_W-1:0] source_row;
     logic signed [COL_COORD_W-1:0] source_col;
-    logic signed [ROW_COORD_W-1:0] bottom_row;
     logic rows_ready;
+
+    // Registered row target (R3).  rows_ready used to add kh_offset to
+    // out_base_row and run two signed compares in the same cycle, and that
+    // cone sat in front of s_ready (accel_top's source gating).  The target
+    // is now formed from out_base_row's NEXT value, so rows_target_q and
+    // rows_ok_q always describe the current out_base_row, and the live
+    // check is a single unsigned compare against rows_written.
+    logic                          row_advance;
+    logic signed [ROW_COORD_W-1:0] next_base_row;
+    logic signed [ROW_COORD_W-1:0] next_bottom_row;
+    logic [ROW_W-1:0]              rows_target_q;
+    logic                          rows_ok_q;
+    // Stage 2 of the geometry latch (kh_offset, in_h_coord) settles one
+    // cycle after the frame's first beat; rows_ok_q is held low until then.
+    logic                          frame_started_q;
 
     function automatic logic [RING_W-1:0] next_slot(input logic [RING_W-1:0] s);
         return (s == LAST_RING_SLOT) ? '0 : s + 1'b1;
@@ -335,8 +348,6 @@ module window_gen #(
         else
             active_count = remaining_cols;
 
-        rows_written_coord = '0;
-        rows_written_coord[ROW_W-1:0] = rows_written;
         kh_coord = '0;
         kh_coord[KH_W-1:0] = kh_count;
         kw_coord = '0;
@@ -344,7 +355,6 @@ module window_gen #(
         lane_coord = '0;
         lane_coord[3:0] = gather_issue_lane;
 
-        bottom_row = out_base_row + kh_offset;
         source_row = out_base_row + kh_coord;
         source_col = tile_base_col + kw_coord + lane_coord;
 
@@ -352,9 +362,19 @@ module window_gen #(
         // A's fix (b)).  Wait only for the last real row; ST_READ already
         // emits zero outside the frame.  The write_busy guard against ring
         // overwrite is unchanged.  A bad configuration never becomes ready.
-        rows_ready = !cfg_error && !lb_write_busy && (bottom_row >= NEG_ONE) &&
-                     ((bottom_row < in_h_coord) ? (rows_written_coord > bottom_row)
-                                                : (rows_written_coord == in_h_coord));
+        rows_ready = !cfg_error && !lb_write_busy && rows_ok_q &&
+                     (rows_written >= rows_target_q);
+
+        // out_base_row's next value, mirroring every assignment to it below.
+        row_advance = (state == ST_OUTPUT) && m_ready && (k_count == last_k_q) &&
+                      (remaining_cols <= 8) && (out_y != last_out_y_q);
+        if (restart_ok || ((state == ST_INPUT) && !frame_started))
+            next_base_row = pad_row_init;
+        else if (row_advance)
+            next_base_row = out_base_row + 1'b1;
+        else
+            next_base_row = out_base_row;
+        next_bottom_row = next_base_row + kh_offset;
         allow_input = (state == ST_INPUT) && !cfg_error;
         resume_write = 1'b0;
         if ((state == ST_INPUT) && rows_ready)
@@ -398,6 +418,25 @@ module window_gen #(
                 frame_started <= 1'b0;
             else if ((s_valid && s_ready) || (state != ST_INPUT))
                 frame_started <= 1'b1;
+        end
+    end
+
+    // Rows needed by the window at next_base_row: up to its bottom row, or
+    // the whole frame when the bottom row is virtual padding.  rows_written
+    // never exceeds in_h, so ">=" against in_h is the old "==".
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            frame_started_q <= 1'b0;
+            rows_ok_q       <= 1'b0;
+            rows_target_q   <= '0;
+        end else begin
+            frame_started_q <= frame_started && !restart_ok;
+            rows_ok_q       <= frame_started_q && !restart_ok &&
+                               (next_bottom_row >= NEG_ONE);
+            if (next_bottom_row < in_h_coord)
+                rows_target_q <= ROW_W'(next_bottom_row + 1'b1);
+            else
+                rows_target_q <= in_h_q;
         end
     end
 
@@ -470,7 +509,6 @@ module window_gen #(
                         gather_issue_lane      <= '0;
                         gather_capture_pending <= 1'b0;
                         gather_capture_from_lb <= 1'b0;
-                        gather_reg             <= '0;
                         tile_base_col          <= pad_col_init;
                         kh_slot                <= base_slot;
                         tile_byte              <= pad_byte_q;
@@ -526,7 +564,6 @@ module window_gen #(
                                     gather_issue_lane       <= '0;
                                     gather_capture_pending  <= 1'b0;
                                     gather_capture_from_lb  <= 1'b0;
-                                    gather_reg              <= '0;
                                     out_base_row            <= out_base_row + 1'b1;
                                     tile_base_col           <= pad_col_init;
                                     base_slot               <= next_slot(base_slot);
@@ -546,7 +583,6 @@ module window_gen #(
                                 gather_issue_lane       <= '0;
                                 gather_capture_pending  <= 1'b0;
                                 gather_capture_from_lb  <= 1'b0;
-                                gather_reg              <= '0;
                                 tile_base_col           <= tile_base_col + TILE_SOURCE_STEP;
                                 kh_slot                 <= base_slot;
                                 tile_byte               <= tile_byte + c_phys_tile_step;
@@ -582,7 +618,6 @@ module window_gen #(
                             gather_issue_lane      <= '0;
                             gather_capture_pending <= 1'b0;
                             gather_capture_from_lb <= 1'b0;
-                            gather_reg             <= '0;
                             state                  <= ST_READ;
                         end
                     end
