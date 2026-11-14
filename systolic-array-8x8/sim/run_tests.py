@@ -119,6 +119,7 @@ VECTOR_GENERATORS = [
     ("gen_fc_vectors.py", "fc1_y.mem"),
     ("gen_v3_e2e_vectors.py", "v3e_img0_pred.mem"),
     ("gen_sys_vectors.py", "sys_ovf_done.mem"),
+    ("gen_netprog_vectors.py", "np_v3_meta.json"),
     # Must stay LAST: lenet_ref imports pool_ref and fc_ref, so this entry
     # composes the other lanes' references instead of standing alone.
     ("gen_lenet_vectors.py", "lenet_pred.mem"),
