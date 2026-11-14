@@ -13,6 +13,16 @@ from netprog import emit_program
 VECTORS = Path(__file__).resolve().parent.parent / "sim" / "vectors"
 
 
+def write_tb_meta(name: str, meta: dict) -> None:
+    """Write the small, fixed-order subset that the SV replay TB consumes."""
+    words = [0x4E504D31, len(meta["logits"]), meta["class_count"]]
+    for item, pred in zip(meta["logits"], meta["expected_argmax"], strict=True):
+        words.extend((item["offset"], item["nbeats"], item["count"], pred))
+    (VECTORS / f"{name}_meta.mem").write_text(
+        "".join(f"{word & 0xFFFFFFFF:08X}\n" for word in words),
+        encoding="ascii", newline="\n")
+
+
 def build_v3_model_and_images() -> tuple[dict, list, list[dict]]:
     """Use the authority generator's constructors; do not duplicate its fixture."""
     rng = random.Random(20261109)
@@ -93,11 +103,13 @@ def main() -> None:
     model_path = VECTORS / "np_v3_model.json"
     model_path.write_text(json.dumps(model, separators=(",", ":")) + "\n",
                           encoding="utf-8", newline="\n")
-    emit_program(model, images, VECTORS, "np_v3")
+    v3_result = emit_program(model, images, VECTORS, "np_v3")
+    write_tb_meta("np_v3", v3_result["meta"])
     lenet_model, lenet_images, lenet_logits = build_lenet_model_and_image()
     (VECTORS / "np_lenet_model.json").write_text(
         json.dumps(lenet_model, separators=(",", ":")) + "\n", encoding="utf-8", newline="\n")
     lenet_result = emit_program(lenet_model, lenet_images, VECTORS, "np_lenet")
+    write_tb_meta("np_lenet", lenet_result["meta"])
     if lenet_result["logits"][0] != lenet_logits:
         raise AssertionError("contract-order LeNet logits differ from lenet_ref")
     print(f"PASS gen_netprog_vectors: v3 {len(images)} images; LeNet 1 image, logits bit-exact")
