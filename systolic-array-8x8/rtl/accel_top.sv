@@ -106,7 +106,8 @@ module accel_top #(
     output logic [ROWS-1:0] m_sat_flat,
     output logic [ROWS-1:0] m_ovf_flat,
     // CONTROL.SOFT_RESET pulse, already fanned out to the datapath here.
-    output logic soft_reset
+    output logic soft_reset,
+    output logic irq
 );
     localparam int ROW_W = $clog2(ROWS+1);
     localparam int K_W = $clog2(K_MAX+1);
@@ -208,6 +209,17 @@ module accel_top #(
     logic ab_rd_valid, ab_rd_ready, ab_rd_last, ab_rd_busy;
     logic [ROWS*8-1:0] ab_rd_data;
     logic ab_seq_error, ab_ovf_error, ab_seq_seen, ab_ovf_seen;
+
+    logic reg_w_wr_en;
+    logic [$clog2(ROWS)-1:0] reg_w_wr_bank, mux_w_wr_bank;
+    logic [$clog2(W_DEPTH)-1:0] reg_w_wr_addr, mux_w_wr_addr;
+    logic [7:0] reg_w_wr_data, mux_w_wr_data;
+    logic mux_w_wr_en;
+
+    assign mux_w_wr_en = w_wr_en || reg_w_wr_en;
+    assign mux_w_wr_bank = w_wr_en ? w_wr_bank : reg_w_wr_bank;
+    assign mux_w_wr_addr = w_wr_en ? w_wr_addr : reg_w_wr_addr;
+    assign mux_w_wr_data = w_wr_en ? w_wr_data : reg_w_wr_data;
 
     // Runtime-derived values are sampled only after a successful COMMIT.  No
     // multiply or subtract is present in a per-beat address path.
@@ -568,6 +580,8 @@ module accel_top #(
         .pass_aborted(abort_q), .start(start), .soft_reset(soft_reset),
         .counter_clear(counter_clear), .cfg_commit(cfg_commit),
         .layer_swap(layer_swap),
+        .w_wr_en(reg_w_wr_en), .w_wr_bank(reg_w_wr_bank),
+        .w_wr_addr(reg_w_wr_addr), .w_wr_data(reg_w_wr_data), .irq(irq),
         .cfg_bias_q(cfg_bias_q), .cfg_m0(cfg_m0),
         .cfg_shift_n(cfg_shift_n), .cfg_relu(cfg_relu), .cfg_bypass(cfg_bypass),
         .cfg_c_in(cfg_c_in), .cfg_c_phys(cfg_c_phys),
@@ -589,8 +603,8 @@ module accel_top #(
         .clk(clk), .rst_n(dp_rst_n), .s_valid(src_valid), .s_ready(src_ready),
         .s_data(src_data), .s_last(src_last),
         .restart(go), .restart_error(restart_error),
-        .w_wr_en(w_wr_en), .w_wr_bank(w_wr_bank), .w_wr_addr(w_wr_addr),
-        .w_wr_data(w_wr_data), .frame_start(go),
+        .w_wr_en(mux_w_wr_en), .w_wr_bank(mux_w_wr_bank),
+        .w_wr_addr(mux_w_wr_addr), .w_wr_data(mux_w_wr_data), .frame_start(go),
         .cfg_active_rows(cfg_active_rows), .cfg_k_len(cfg_k_len[K_W-1:0]),
         .cfg_tile_idx(cfg_tile_idx[TILE_W-1:0]),
         .cfg_in_h(cfg_in_h), .cfg_in_w(cfg_in_w), .cfg_c_in(cfg_c_in),
