@@ -233,6 +233,9 @@ def emit_program(model: str | Path | dict, images: list, out_dir: str | Path, na
     in_words, exp_words, logits_all, preds = [], [], [], []
     image_input_offsets = []
     logit_offsets = []
+    final_layer = packed["layers"][-1]
+    final_plane = final_layer["stored_h"] * final_layer["stored_w"]
+    final_channels = final_layer["c_out"]
     for image in images:
         flat = [v for row in image for px in row for v in px]
         if len(flat) % ROWS:
@@ -242,7 +245,14 @@ def emit_program(model: str | Path | dict, images: list, out_dir: str | Path, na
         image_input_offsets.append(len(in_words))
         in_words.extend(pack_word(flat[i:i + ROWS]) for i in range(0, len(flat), ROWS))
         logit_offsets.append(len(exp_words))
-        exp_words.extend(pack_word(logits[i:i + ROWS]) for i in range(0, len(logits), ROWS))
+        # Hardware emits one complete raster per output-channel tile/pass.
+        # For the usual final FC final_plane=1; spatial final layers need the
+        # same tile-major ordering used by their separate M transfers.
+        for tile in range(final_layer["tiles"]):
+            for pixel in range(final_plane):
+                base = pixel * final_channels + tile * ROWS
+                exp_words.append(pack_word(logits[base:min(base + ROWS,
+                                                          (pixel + 1) * final_channels)]))
         logits_all.append(logits)
         preds.append(argmax_first(logits))
 
@@ -262,7 +272,7 @@ def emit_program(model: str | Path | dict, images: list, out_dir: str | Path, na
                 if layer["src_sel"] == 0:
                     lines.append(f"S {image_input_offsets[image_idx]:X} {frame_beats:X}")
                 if layer["dst_sel"]:
-                    lines.append(f"M {logit_offsets[image_idx] + tile:X} 1")
+                    lines.append(f"M {logit_offsets[image_idx] + tile * final_plane:X} {final_plane:X}")
                 lines.append(f"W {R.CONTROL:03X} {_field('CONTROL', START=1):08X}")
                 lines.append(f"P {R.STATUS:03X} {_field('STATUS', DONE=1):08X} {_field('STATUS', DONE=1):08X}")
                 clean_mask = _field("STATUS", ERROR=1, ABORTED=1)
@@ -280,9 +290,10 @@ def emit_program(model: str | Path | dict, images: list, out_dir: str | Path, na
         "name": name, "class_count": packed["layers"][-1]["c_out"],
         "expected_argmax": preds,
         "logits": [{"image": i, "offset": logit_offsets[i],
-                    "nbeats": packed["layers"][-1]["tiles"], "count": len(logits_all[i])}
+                    "nbeats": packed["layers"][-1]["tiles"] * final_plane,
+                    "count": len(logits_all[i])}
                    for i in range(len(images))],
-        "lane_order": "logit[c] is byte lane c%8 of beat offset+c//8; lane 0 is bits 7:0",
+        "lane_order": "tile-major: beat offset+(c//8)*plane+pixel, byte lane c%8; lane 0 is bits 7:0",
         "input": {"layout": "HWC INT8", "frame_beats": frame_beats,
                   "offsets": image_input_offsets},
         "weight_bytes_per_bank": packed["weight_end"],
