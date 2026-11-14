@@ -230,7 +230,7 @@ module tb_axi_lite_regs;
         rst_n = 1'b1;
 
         axi_read(12'h000, 2, value);
-        check(value == 32'h0001_0004, "VERSION mismatch");
+        check(value == 32'h0001_0005, "VERSION mismatch");
         axi_read(12'h008, 1, value);
         check(value[0] && !value[1] && !value[2] && !value[3] && !value[5],
               "reset STATUS mismatch");

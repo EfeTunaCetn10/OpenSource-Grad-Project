@@ -2,7 +2,7 @@
 
 // Hand-written AXI4-Lite register file for the Stage 1 control plane.
 //
-// Register map v4 (reserved bits are RAZ/WI):
+// Register map v5 (reserved bits are RAZ/WI):
 //   0x000 VERSION      [31:16] RTL, [15:0] register-map version
 //   0x004 CONTROL      [0] START W1P, [1] SOFT_RESET W1P, [2] IRQ_EN,
 //                      [3] LAYER_SWAP W1P
@@ -19,6 +19,8 @@
 //   0x020 DP_CFG       [0] SRC_SEL, [1] POOL_EN, [2] DST_SEL
 //   0x024 ERR_DETAIL   [15:0] sticky error-source bits, W1C, cleared by
 //                      SOFT_RESET (see err_detail_set)
+//   0x028 W_ADDR       [12:0] ADDR, [18:16] BANK
+//   0x02C W_DATA       [7:0] DATA, write pulse then W_ADDR.ADDR increments
 //   0x040..0x0BC       eight 16-byte parameter banks: BIAS_Q, M0,
 //                      SHIFT_N/RELU, reserved
 //   0x0C0 COMMIT       [0] commit W1P
@@ -87,6 +89,11 @@ module axi_lite_regs #(
     output logic                  counter_clear,
     output logic                  cfg_commit,
     output logic                  layer_swap,
+    output logic                  w_wr_en,
+    output logic [2:0]            w_wr_bank,
+    output logic [12:0]           w_wr_addr,
+    output logic [7:0]            w_wr_data,
+    output logic                  irq,
 
     // Active, committed parameter image.  Unpacked arrays are used so one
     // requant_unit can connect directly to each bank without a packing shim.
@@ -117,7 +124,7 @@ module axi_lite_regs #(
     // Version fields are intentionally local to this block so a map change
     // cannot be made without leaving a visible software version trace.
     localparam logic [15:0] RTL_VERSION    = 16'h0001;
-    localparam logic [15:0] REGMAP_VERSION = 16'h0004;
+    localparam logic [15:0] REGMAP_VERSION = 16'h0005;
 
     localparam logic [ADDR_W-1:0] A_VERSION      = 12'h000;
     localparam logic [ADDR_W-1:0] A_CONTROL      = 12'h004;
@@ -129,6 +136,8 @@ module axi_lite_regs #(
     localparam logic [ADDR_W-1:0] A_W_BASE       = 12'h01C;
     localparam logic [ADDR_W-1:0] A_DP_CFG       = 12'h020;
     localparam logic [ADDR_W-1:0] A_ERR_DETAIL   = 12'h024;
+    localparam logic [ADDR_W-1:0] A_W_ADDR       = 12'h028;
+    localparam logic [ADDR_W-1:0] A_W_DATA       = 12'h02C;
     localparam logic [ADDR_W-1:0] A_PARAM_BASE   = 12'h040;
     localparam logic [ADDR_W-1:0] A_PARAM_END    = 12'h0BC;
     localparam logic [ADDR_W-1:0] A_COMMIT       = 12'h0C0;
@@ -167,6 +176,8 @@ module axi_lite_regs #(
     logic [7:0]  error_latched;
     logic [15:0] err_detail_latched;
     logic        aborted_latched;
+    logic [12:0] weight_addr;
+    logic [2:0]  weight_bank;
 
     logic        aw_hold;
     logic [ADDR_W-1:0] awaddr_hold;
@@ -194,6 +205,7 @@ module axi_lite_regs #(
     logic [31:0] layer2_merged;
     logic [31:0] w_base_merged;
     logic [31:0] dp_cfg_merged;
+    logic [31:0] weight_addr_merged;
 
     integer i;
     integer j;
@@ -277,6 +289,10 @@ module axi_lite_regs #(
                 A_ERR_DETAIL: begin
                     read_mux[15:0] = err_detail_latched;
                 end
+                A_W_ADDR: begin
+                    read_mux[12:0] = weight_addr;
+                    read_mux[18:16] = weight_bank;
+                end
                 A_LAYER_CFG: begin
                     read_mux = {1'b0, shadow_layer_cfg};
                 end
@@ -343,6 +359,9 @@ module axi_lite_regs #(
                                     write_strb);
         dp_cfg_merged = merge_wstrb({29'h0, shadow_dp_cfg}, write_data,
                                     write_strb);
+        weight_addr_merged = merge_wstrb({13'h0, weight_bank, 3'h0,
+                                          weight_addr}, write_data,
+                                         write_strb);
 
         write_param = write_complete &&
                       (write_addr >= A_PARAM_BASE) &&
@@ -396,6 +415,10 @@ module axi_lite_regs #(
             write_strb[0] && write_data[3] && busy)
             error_set_this_cycle[3] = 1'b1;
 
+        if (write_complete && (write_addr == A_W_DATA) &&
+            write_strb[0] && busy)
+            error_set_this_cycle[3] = 1'b1;
+
         commit_accept = write_complete && (write_addr == A_COMMIT) &&
                         write_strb[0] && write_data[0] && !busy &&
                         (written_mask == 24'hFF_FFFF);
@@ -404,6 +427,8 @@ module axi_lite_regs #(
                 ($unsigned(shadow_m0[j]) >= 18'd131072))
                 commit_accept = 1'b0;
     end
+
+    assign irq = irq_en && done_latched;
 
     always_comb begin
         for (k = 0; k < 8; k = k + 1) begin
@@ -451,6 +476,8 @@ module axi_lite_regs #(
             error_latched <= 8'h0;
             err_detail_latched <= 16'h0;
             aborted_latched <= 1'b0;
+            weight_addr <= '0;
+            weight_bank <= '0;
             aw_hold <= 1'b0;
             awaddr_hold <= '0;
             w_hold <= 1'b0;
@@ -466,6 +493,10 @@ module axi_lite_regs #(
             counter_clear <= 1'b0;
             cfg_commit <= 1'b0;
             layer_swap <= 1'b0;
+            w_wr_en <= 1'b0;
+            w_wr_bank <= '0;
+            w_wr_addr <= '0;
+            w_wr_data <= '0;
             for (i = 0; i < 8; i = i + 1) begin
                 shadow_bias_q[i] <= '0;
                 shadow_m0[i] <= '0;
@@ -482,6 +513,7 @@ module axi_lite_regs #(
             counter_clear <= 1'b0;
             cfg_commit <= 1'b0;
             layer_swap <= 1'b0;
+            w_wr_en <= 1'b0;
 
             // A datapath event is latched.  W1C is applied first, then the
             // event is ORed back in, so an event cannot be lost.
@@ -567,6 +599,19 @@ module axi_lite_regs #(
                     end
                     A_DP_CFG: begin
                         shadow_dp_cfg <= dp_cfg_merged[2:0];
+                    end
+                    A_W_ADDR: begin
+                        weight_addr <= weight_addr_merged[12:0];
+                        weight_bank <= weight_addr_merged[18:16];
+                    end
+                    A_W_DATA: begin
+                        if (write_strb[0] && !busy) begin
+                            w_wr_en <= 1'b1;
+                            w_wr_bank <= weight_bank;
+                            w_wr_addr <= weight_addr;
+                            w_wr_data <= write_data[7:0];
+                            weight_addr <= weight_addr + 1'b1;
+                        end
                     end
                     A_COMMIT: begin
                         if (commit_accept) begin
