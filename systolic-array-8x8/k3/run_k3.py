@@ -117,14 +117,14 @@ def find_simulator_log() -> Path | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--program", choices=("v3", "lenet"), default="v3")
+    parser.add_argument("--program", choices=("v3", "lenet", "bringup"), default="v3")
     parser.add_argument("--mutation", choices=("none", "length", "tlast"), default="none")
     args = parser.parse_args()
 
     if BUILD.exists():
         shutil.rmtree(BUILD)
     BUILD.mkdir(parents=True)
-    program_base = emit_one_image(args.program)
+    program_base = BUILD / "bringup" if args.program == "bringup" else emit_one_image(args.program)
     tb, rtl_override = make_mutants(args.mutation)
 
     env = os.environ.copy()
@@ -153,14 +153,15 @@ def main() -> int:
         "-journal", str(BUILD / "run_k3.jou"),
         "-log", str(BUILD / "run_k3_vivado.log"),
         "-source", str(HERE / "run_k3_sim.tcl"),
-        "-tclargs", str(program_base), str(tb),
+        "-tclargs", str(program_base), str(tb), args.program,
     ]
     sim_rc = tee_run(sim_command, BUILD / "run_k3_console.log", env)
     sim_dir = VIVADO_BUILD / "bd" / "accel_bd_project.sim" / "sim_1" / "behav" / "xsim"
     command_shell = Path(os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe"))
     if sim_rc == 0:
-        for suffix in (".prog", "_in.mem", "_exp.mem", "_meta.mem"):
-            shutil.copyfile(Path(str(program_base) + suffix), sim_dir / ("k3_program" + suffix))
+        if args.program != "bringup":
+            for suffix in (".prog", "_in.mem", "_exp.mem", "_meta.mem"):
+                shutil.copyfile(Path(str(program_base) + suffix), sim_dir / ("k3_program" + suffix))
         for stage in ("compile", "elaborate", "simulate"):
             script = sim_dir / f"{stage}.bat"
             if not script.exists():
