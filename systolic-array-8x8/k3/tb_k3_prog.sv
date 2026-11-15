@@ -37,10 +37,13 @@ module tb_k3_prog;
     int meta_pred [0:MAX_IMAGES-1];
 
     logic [1023:0] vip_data;
+    logic [1023:0] trace_sparse0, trace_sparse1, trace_sparse2;
     logic [1:0] vip_resp;
     int errors, total_images, total_passes, total_beats;
     int s_offset, s_nbeats, m_offset, m_nbeats;
     bit s_pending, m_pending;
+    bit bringup_only;
+    logic [31:0] m_dst_addr;
     string predictions;
     string program_base;
     logic [31:0] hp_aw_addr [0:15];
@@ -125,6 +128,17 @@ module tb_k3_prog;
         end
     endtask
 
+    task automatic ddr_read_word(input logic [31:0] address,
+                                 output logic [63:0] value);
+        logic [1023:0] read_data;
+        begin
+            read_data = 'x;
+            // Public PS7 VIP API order is address, byte count, output data.
+            `PS7.read_mem(address, 8, read_data);
+            value = read_data[63:0];
+        end
+    endtask
+
     task automatic pl_reset;
         begin
             `PS7.fpga_soft_reset(32'h0000_0001);
@@ -153,7 +167,8 @@ module tb_k3_prog;
         end
     endtask
 
-    task automatic start_s2mm(input int offset, input int nbeats);
+    task automatic start_s2mm(input int offset, input int nbeats,
+                              input logic [31:0] destination);
         int beat;
         begin
             if (m_pending) begin
@@ -166,10 +181,11 @@ module tb_k3_prog;
                 hp_capture_bytes = 0;
                 dma_write(S2MM_DMASR, 32'h0000_1000);
                 dma_write(S2MM_DMACR, 32'h0000_1001);
-                dma_write(S2MM_DA, DST_DDR);
+                dma_write(S2MM_DA, destination);
                 dma_write(S2MM_LENGTH, 8*nbeats);
                 m_offset = offset;
                 m_nbeats = nbeats;
+                m_dst_addr = destination;
                 m_pending = 1'b1;
             end
         end
@@ -236,11 +252,15 @@ module tb_k3_prog;
     // Permanent transport pre-check: 1x1 convolution, C_IN=8, one input beat,
     // one output beat.  Lane 0 has weight 1 and identity requantization;
     // inactive output lanes are masked to zero by LAST_ROWS=1.
-    task automatic dma_accel_bringup;
+    task automatic dma_accel_bringup(input int trial,
+                                     input logic [31:0] destination,
+                                     input logic [63:0] input_word);
         logic [31:0] value;
+        logic [63:0] ddr_word;
         int bank, k, polls;
         begin
-            $display("K3_BRINGUP: starting 8-byte DMA/accelerator round trip");
+            $display("K3_BRINGUP: trial=%0d starting addr=%08h data=%016h",
+                     trial, destination, input_word);
             accel_read(32'h000, value);
             if (value !== 32'h0001_0005)
                 fail($sformatf("bring-up VERSION=%08h expected=00010005", value));
@@ -260,10 +280,10 @@ module tb_k3_prog;
                 accel_write(32'h048 + 16*bank, 32'd16);
             end
             accel_write(32'h0C0, 32'd1);
-            in_mem[0] = 64'h0000_0000_0000_0005;
-            exp_mem[0] = 64'h0000_0000_0000_0005;
-            start_s2mm(0, 1);
-            start_mm2s(0, 1);
+            in_mem[trial] = input_word;
+            exp_mem[trial] = input_word;
+            start_s2mm(trial, 1, destination);
+            start_mm2s(trial, 1);
             accel_write(32'h004, 32'd1);
             value = '0;
             polls = 0;
@@ -284,13 +304,20 @@ module tb_k3_prog;
                 $display("K3_BRINGUP_DIAG: S2MM_DMASR=%08h", value);
             end
             join_transfers();
+            if (bringup_only) begin
+                ddr_read_word(destination, ddr_word);
+                $display("K3_DDR_READ: trial=%0d time=%0t addr=%08h data=%016h expected=%016h",
+                         trial, $time, destination, ddr_word, input_word);
+            end
             accel_read(32'h00C, value);
             if (value[7:0] != 0)
                 fail($sformatf("bring-up accelerator ERROR=%08h", value));
-            if (got_mem[0] !== 64'h0000_0000_0000_0005)
-                fail($sformatf("bring-up result=%016h", got_mem[0]));
+            if (got_mem[trial] !== input_word)
+                fail($sformatf("bring-up trial=%0d result=%016h expected=%016h",
+                               trial, got_mem[trial], input_word));
             if (errors == 0)
-                $display("K3_BRINGUP: PASS bytes=8 data=%016h", got_mem[0]);
+                $display("K3_BRINGUP: PASS trial=%0d bytes=8 data=%016h",
+                         trial, got_mem[trial]);
             accel_write(32'h008, 32'd4);
         end
     endtask
@@ -382,7 +409,7 @@ module tb_k3_prog;
                             end
                             "M": begin
                                 if (fields != 3 || b == 0) fail({"malformed M: ", line});
-                                else start_s2mm(int'(a), int'(b));
+                                else start_s2mm(int'(a), int'(b), DST_DDR);
                             end
                             "J": begin
                                 if (fields != 1) fail({"malformed J: ", line});
@@ -431,7 +458,9 @@ module tb_k3_prog;
         hp_aw_tail = 0;
         hp_aw_count = 0;
         hp_capture_bytes = 0;
+        m_dst_addr = DST_DDR;
         predictions = "";
+        bringup_only = $test$plusargs("K3_BRINGUP_ONLY");
         if (!$value$plusargs("PROG_BASE=%s", program_base))
             program_base = "k3_program";
 
@@ -449,13 +478,26 @@ module tb_k3_prog;
         #500;
         release dut.accel_bd_i.rst_ps7_0_100M_peripheral_aresetn;
         #500;
-        dma_accel_bringup();
-        pl_reset();
-        s_pending = 1'b0;
-        m_pending = 1'b0;
-        run_program();
+        if (bringup_only) begin
+            // Three distinct values to one location, followed by writes to two
+            // distinct locations.  This isolates any one-transaction commit lag.
+            dma_accel_bringup(0, DST_DDR,      64'h0000_0000_0000_0011);
+            dma_accel_bringup(1, DST_DDR,      64'h0000_0000_0000_0022);
+            dma_accel_bringup(2, DST_DDR,      64'h0000_0000_0000_0033);
+            dma_accel_bringup(3, DST_DDR + 8,  64'h0000_0000_0000_0044);
+            dma_accel_bringup(4, DST_DDR + 16, 64'h0000_0000_0000_0055);
+        end else begin
+            dma_accel_bringup(0, DST_DDR, 64'h0000_0000_0000_0005);
+            pl_reset();
+            s_pending = 1'b0;
+            m_pending = 1'b0;
+            run_program();
+        end
 
-        if (errors == 0)
+        if (errors == 0 && bringup_only)
+            $display("PASS tb_k3_prog: bringup transfers=5 beats compared=%0d",
+                     total_beats);
+        else if (errors == 0)
             $display("PASS tb_k3_prog: images=%0d passes=%0d beats compared=%0d predicted classes=%s",
                      total_images, total_passes, total_beats, predictions);
         else
@@ -509,9 +551,9 @@ module tb_k3_prog;
                         // AXI byte lanes are relative to the aligned bus word;
                         // WSTRB controls exactly which captured bytes change.
                         hp_byte_addr = {hp_beat_addr[31:3], 3'b000} + hp_lane;
-                        if (hp_byte_addr >= DST_DDR &&
-                            hp_byte_addr < DST_DDR + 8*MAX_WORDS) begin
-                            hp_cap_index = (hp_byte_addr - DST_DDR) >> 3;
+                        if (hp_byte_addr >= m_dst_addr &&
+                            hp_byte_addr < m_dst_addr + 8*MAX_WORDS) begin
+                            hp_cap_index = (hp_byte_addr - m_dst_addr) >> 3;
                             hp_capture_mem[hp_cap_index]
                                 [8*hp_byte_addr[2:0] +: 8] =
                                 dut.accel_bd_i.axi_mem_ic_M00_AXI_WDATA
@@ -535,6 +577,51 @@ module tb_k3_prog;
                     endcase
                 end
             end
+        end
+        if (bringup_only &&
+            dut.accel_bd_i.axi_mem_ic_M00_AXI_BVALID &&
+            dut.accel_bd_i.axi_mem_ic_M00_AXI_BREADY)
+            $display("K3_HP_WRITE: B time=%0t resp=%0h id=%0h",
+                     $time, dut.accel_bd_i.axi_mem_ic_M00_AXI_BRESP,
+                     dut.accel_bd_i.axi_mem_ic_M00_AXI_BID);
+    end
+
+    // Instrument the real PS7 VIP path.  HP0 is routed through DDR arbiter
+    // port 1; the final probe watches the exact sparse-memory words read by
+    // the public read_mem API.
+    always @(posedge `PS7.net_wr_dv_ddr_hp0)
+        if (bringup_only)
+            $display("K3_VIP_HP_FIFO: time=%0t addr=%08h bytes=%0d data=%016h strb=%02h",
+                     $time, `PS7.net_wr_addr_hp0, `PS7.net_wr_bytes_hp0,
+                     `PS7.net_wr_data_hp0[63:0], `PS7.net_wr_strb_hp0[7:0]);
+
+    always @(`PS7.ddr_wr_dv_port1)
+        if (bringup_only)
+            $display("K3_VIP_AFI_PORT1: time=%0t valid=%b addr=%08h bytes=%0d data=%016h strb=%02h",
+                     $time, `PS7.ddr_wr_dv_port1, `PS7.ddr_wr_addr_port1,
+                     `PS7.ddr_wr_bytes_port1, `PS7.ddr_wr_data_port1[63:0],
+                     `PS7.ddr_wr_strb_port1[7:0]);
+
+    always @(posedge `PS7.ddrc.wr_req)
+        if (bringup_only)
+            $display("K3_VIP_DDR_REQ: time=%0t addr=%08h bytes=%0d data=%016h strb=%02h",
+                     $time, `PS7.ddrc.wr_addr, `PS7.ddrc.wr_bytes,
+                     `PS7.ddrc.wr_data[63:0], `PS7.ddrc.wr_strb[7:0]);
+
+    always @(posedge `PS7.ddrc.wr_ack) begin
+        if (bringup_only) begin
+            // wr_ack is assigned after the blocking sparse write_mem call.
+            // One time unit avoids the active/NBA-region ambiguity of the ack.
+            #1;
+            trace_sparse0 = 'x;
+            trace_sparse1 = 'x;
+            trace_sparse2 = 'x;
+            `PS7.ddrc.ddr.read_mem(trace_sparse0, DST_DDR, 8);
+            `PS7.ddrc.ddr.read_mem(trace_sparse1, DST_DDR + 8, 8);
+            `PS7.ddrc.ddr.read_mem(trace_sparse2, DST_DDR + 16, 8);
+            $display("K3_VIP_SPARSE_POST_ACK: time=%0t d0=%016h d8=%016h d10=%016h",
+                     $time, trace_sparse0[63:0], trace_sparse1[63:0],
+                     trace_sparse2[63:0]);
         end
     end
 
