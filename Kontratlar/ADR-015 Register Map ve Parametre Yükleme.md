@@ -1,16 +1,16 @@
 ---
 title: ADR-015 Register Map ve Parametre Yükleme
 created: 2026-09-25
-modified: 2026-09-25
+modified: 2026-11-15
 type: decision
-status: önerildi
+status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl, axi-lite, register-map]
 ---
 
 # ADR-015: Register Map ve Parametre Yükleme Protokolü
 
 ## Durum
-**Önerildi — Kişi B onayı bekliyor (2026-09-25).**
+**Kabul edildi — 2026-11-15 (Emin).** Öneri 2026-09-25; map v5'e kadar uygulanmış durumda (aşağıdaki ekler).
 
 Roadmap §6.5 register'ların *hangileri* olduğunu örnek olarak listeliyordu; offset, bit alanı,
 reset değeri ve yükleme protokolü tanımsızdı. `(M0, n, bias_q)` register dosyasının tile başına
@@ -20,10 +20,10 @@ yükleneceği değil. Bu ADR Roadmap §6.5'i örnek olmaktan çıkarıp bağlay�
 | Madde | Durum |
 |---|---|
 | `ERR_CFG_M0` zorunlu — yapılandırılmamış cihazı yakalayan tek guard | **Türetilmiş** — ADR-003'ün `n=0` yasallaşmasının doğrudan sonucu |
-| Shadow + açık `COMMIT` protokolü | Onay bekliyor |
-| Offset ve bit alanı düzeni | Onay bekliyor (konvansiyon) |
-| `PARAM_SRC` mux'ının şimdi konması | Onay bekliyor |
-| `BUSY` iken commit reddi (erteleme değil) | Onay bekliyor |
+| Shadow + açık `COMMIT` protokolü | Kabul edildi |
+| Offset ve bit alanı düzeni | Kabul edildi (konvansiyon) |
+| `PARAM_SRC` mux'ının şimdi konması | Kabul edildi |
+| `BUSY` iken commit reddi (erteleme değil) | Kabul edildi |
 
 ## Karar
 
@@ -211,3 +211,122 @@ Bu ADR o kontrolü "opsiyonel kanarya" diye işaretliyordu ve
 çelişirdi. `ERR_CFG_SHIFT` biti map'te duruyor ama set edilmiyor; export-bug kanaryası olarak
 ileride bağlanabilir. **Yapılandırılmamış cihaz guard'ı `ERR_CFG_M0`'dır**, bu ADR'nin zaten
 söylediği gibi.
+
+## Ek madde — 2026-11-06: register map v3 (`faz4-datapath`)
+
+Kaynak: `faz4-datapath` @ `7fbf3f8`, `rtl/axi_lite_regs.sv` başlık yorumu (alan tablosunun
+otoritesi orası). v2 (2026-11-04, `faz3-param`) ve v3 farkları birlikte:
+
+| Adres | Register | v3 alanları | Not |
+|---|---|---|---|
+| 0x000 | VERSION | [15:0] = `0x0003` | v1 → v2 → v3 |
+| 0x004 | CONTROL | [0] START, [1] SOFT_RESET, [2] IRQ_EN, **[3] LAYER_SWAP** (W1P) | LAYER_SWAP busy iken yok sayılır, ERROR[3] |
+| 0x014 | TILE_CFG | + **[21:18] LAST_ROWS** (0 = 8) | v2 |
+| 0x018 | **LAYER_CFG2** | [8:0] C_PHYS | v2 |
+| 0x01C | **W_BASE** | [15:0] ağırlık bank başlangıç adresi | v2; adres = `w_base + tile_idx·k_len + k` |
+| 0x020 | **DP_CFG** | [0] SRC_SEL (0 = s_*, 1 = act_buffer), [1] POOL_EN, [2] DST_SEL (0 = act_buffer, 1 = m_*) | v3 |
+
+**Shadow → active her şey için (v3, K3 düzeltmesi).** LAYER_CFG, TILE_CFG, LAYER_CFG2, W_BASE
+ve DP_CFG yazımları shadow'a gider; okuma shadow'u döndürür; datapath yalnız active görür;
+başarılı COMMIT shadow'u active'e kopyalar ve `k_len`'i commit edilen değerlerden hesaplar.
+Bu ADR'nin başta parametre bankları için koyduğu shadow+commit kuralı böylece geometriye de
+uzanıyor. Sebep: 2026-11-05 sağlık testinde frame ortasında W_BASE yazmak 784 beat'in 676'sını
+sessizce bozdu; "busy iken sonraki tile'ı hazırla" akışı ancak bu ayrımla güvenli.
+
+**COMMIT/START doğrulaması `window_gen` ile eşitlendi:** `out_h = 0`, `out_w = 0`, `pad ≥ kh`,
+`pad ≥ kw`, `stride ≠ 1` START'ı reddeder (ERROR[7]).
+
+**ERROR bitleri — yeni kaynaklar mevcut bitleri paylaşıyor** (`LANE-RAPOR-C.md`): [5] okuma
+akışında pass sonunda artık word kaldı; [6] act_buffer `seq_error`, window_gen `restart_error`;
+[7] act_buffer `ovf_error`, pool `cfg_error`, geometri reddi; [2] requant taşması; [3] busy iken
+komut. Datapath hatası pass'i bitirmez: BUSY yüksek kalır, çıkış SOFT_RESET. Kaynakların
+ayrılması ve hata durumunda pass'i DONE+ERROR ile bitirmek açık madde.
+
+**SOFT_RESET artık datapath'e ulaşıyor:** conv1_top ve pool2x2 kayıtlı bir datapath reset'iyle,
+act_buffer kendi `soft_reset` portuyla (bellek ve bank seçimi korunur). AXI kayıtları korunur.
+
+**PS'nin garanti etmesi gerekenler:** act_buffer kaynaklı katmanda `c_phys = 8 × önceki katmanın
+tile sayısı` ve `in_h, in_w` saklanan düzleme eşit (kısa akış hata vermeden kilitler);
+s_* kaynaklı katmanda frame her tile pass'inde yeniden gönderilir; `tile_count·h·w ≤ 4608`;
+ağırlıklar pass yokken yüklenir.
+
+## Ek madde — 2026-11-07: register map v4, hata sonrası kurtarma
+
+Kaynak: `faz4-datapath` @ `288f84b` (`LANE-RAPOR-L2.md`, `LANE-RAPOR-L3.md`). v3'e göre farklar:
+
+| Adres | Register | v4 | Not |
+|---|---|---|---|
+| 0x000 | VERSION | [15:0] = `0x0004` | |
+| 0x008 | STATUS | + **[5] ABORTED** | pass hatayla bittiğinde; DONE W1C ya da kabul edilen START temizler, SOFT_RESET temizlemez |
+| 0x024 | **ERR_DETAIL** | [15:0] sticky, W1C, SOFT_RESET temizler | ERROR bitlerinin kaynağını ayırır |
+
+ERR_DETAIL bitleri: [7:0] conv1_top `error_flags` (ham; [7] geometri / k_len uyumsuzluğu),
+[8] act_buffer seq, [9] act_buffer ovf, [10] pool cfg, [11] window restart, [12] kaynak
+geometrisi uyuşmazlığı (START reddi), [13] TLAST erken, [14] TLAST geç / pass sonunda artık
+word, [15] watchdog.
+
+**Hata artık pass'i bitiriyor (abort).** Pass sırasında datapath hatası (yukarıdaki kaynaklar;
+requant taşması ve lockstep hariç, onlar ERROR[2] bayrağı) bir cycle sonra: BUSY düşer, DONE +
+ilgili ERROR + ERR_DETAIL + STATUS.ABORTED kurulur, datapath iç reset alır. AXI kayıtları,
+act_buffer belleği, saklanan geometri ve tamamlanmış tile maskesi korunur. PS, W1C sonrası
+**SOFT_RESET'siz** COMMIT+START ile devam eder; yalnızca yarıda kalan tile yeniden koşulur.
+
+**ERROR bit anlamları ADR'nin ilk tablosuna döndü:** [4] TLAST_EARLY (s_* frame beklenen beat
+sayısından önce bitti → abort), [5] TLAST_LATE (son beklenen beat'te s_last yok → yalnız bayrak;
+fazla beat kabul edilmez), [6] TIMEOUT (ilerleme watchdog'u, varsayılan 2^24 cycle ≈ 168 ms;
+herhangi bir handshake sıfırlar; m_ready tıkalıyken sayaç ancak boru dolduktan sonra ilerler),
+[7] konfigürasyon / sıra sınıfı (geometri reddi, act_buffer seq/ovf, pool cfg, restart).
+
+**START kararı registered:** START'tan 4 cycle sonra verilir (aynı CONTROL yazımında
+LAYER_SWAP + START = 0x9 desteklenir). Reddedilen durumlar: kaynak act_buffer ise saklanan
+geometri commit edilenle eşleşmiyor (`in_h=h, in_w=w, c_phys=8·tiles` ya da FC için
+`1×1, c_phys=8·tiles·h·w`) → ERROR[7]+detail[12]; `in_h·in_w·c_phys` 8'in katı değil → ERROR[7].
+
+**act_buffer swap kuralı:** LAYER_SWAP yalnız katmanın 0..tiles−1 tile'larının hepsi yazılmışsa
+kabul edilir; aynı katmanda farklı geometrili pass reddedilir (seq_error).
+
+**PS sözleşmesi ekleri:** TLAST_LATE ya da `dst_sel=1` iken abort sonrası ilgili DMA kanalı
+sıfırlanır/boşaltılır. FC katmanında `c_in ≤ c_phys = 8·önceki tile sayısı`; fazla lane'ler
+ağırlıklarda dışarıda bırakılır (ör. LeNet fc3: c_in 84, c_phys 88).
+
+## Ek madde — 2026-11-15: register map v5, ağırlık yükleme ve interrupt
+
+Kaynak: `faz6-shell` @ `bd844c1`, `rtl/axi_lite_regs.sv` başlık yorumu ve `model/regmap.json`
+(v5'ten itibaren alan tablosunun tek kaynağı; SV paketi, Python ve C başlıkları ondan üretilir,
+`model/gen_regmap.py --check`). Karar: [[ADR-012 Çalışma Zamanında Ağırlık Yükleme|ADR-012]],
+Emin onayı 2026-11-15. **v4'ün hiçbir alanı değişmedi**; v5 yalnız ekler:
+
+| Adres | Register | v5 | Not |
+|---|---|---|---|
+| 0x000 | VERSION | [15:0] = `0x0005` | |
+| 0x028 | **W_ADDR** | RW, [12:0] ADDR, [18:16] BANK, reset 0 | shadow **değil**, doğrudan |
+| 0x02C | **W_DATA** | WO, [7:0] DATA; okuma 0 döner | yazma darbesi + ADDR otomatik artar |
+
+**Ağırlık yazma protokolü.** `W_DATA` yazımı tek cycle'lık bir yazma darbesi üretir:
+`bank_mem[BANK][ADDR] = DATA`, ardından `ADDR <= ADDR + 1` (13 bit sarar, BANK değişmez). Bir
+banka: bir `W_ADDR` yazması + ardışık `W_DATA` yazmaları. `0x01C W_BASE` (v2) ile karıştırılmamalı:
+`W_BASE` pass'in okuma taban adresidir ve shadow/commit'e tabidir; `W_ADDR` yükleme imlecidir ve
+commit beklemez.
+
+**`BUSY` iken `W_DATA`:** yazma yapılmaz, ADDR artmaz, `ERROR[3]` (`ERR_CFG_WR_BUSY`) kalkar. v3
+ekindeki "ağırlıklar pass yokken yüklenir" PS yükümlülüğü böylece donanımda da zorlanıyor.
+
+**Neden shadow değil:** shadow+commit bir pass'in *konfigürasyonunu* atomik yapmak için var.
+Ağırlık bellek içeriğidir, on binlerce bayttır ve zaten `BUSY` dışında yazılabilir; shadow'lamak
+belleği ikiye katlar ve bir şey kazandırmaz.
+
+**Interrupt.** Yeni çıkış portu `irq = CONTROL.IRQ_EN && STATUS.DONE` (seviye duyarlı; `DONE`'ın
+W1C'siyle ya da `IRQ_EN = 0` ile düşer). `CONTROL[2] IRQ_EN` bu ADR'nin ilk tablosunda vardı ama
+bir çıkışa bağlı değildi. Abort ile biten pass de `DONE` kurduğu için interrupt üretir; PS
+`STATUS.ABORTED` ve `ERROR`'a bakarak ayırır. Blok tasarımda `IRQ_F2P[2]`'ye bağlı (`[0]` DMA
+MM2S, `[1]` DMA S2MM).
+
+**Port düzeyi.** `accel_top`'un çıplak `w_wr_*` giriş portları duruyor ve register kaynaklı
+yazmayla mux'lanıyor (`w_wr_en` yüksekse dış port kazanır); AXIS kabukta (`accel_axis`) 0'a
+bağlılar. Adres penceresi blok tasarımda `0x43C0_0000`, 64 KiB.
+
+**PS sözleşmesi ekleri:** sürücü `VERSION[15:0] == 0x0005` kontrol eder; ağırlık yüklemesinden
+sonra `ERROR[3]`'e bakar; `W_DATA` geri okunamaz (yüklenen ağırlığın PS'ten doğrulaması yok).
+
+Doğrulama: `tb_axi_lite_regs` (VERSION), `tb_axis_shell` (yükleme, `BUSY` iken ret, irq),
+`tb_prog_e2e` ve Kademe 3 (tam ağ yalnız bu register'larla yüklenip koşuyor).
