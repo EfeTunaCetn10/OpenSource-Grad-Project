@@ -3,14 +3,14 @@ title: ADR-015 Register Map ve Parametre Yükleme
 created: 2026-09-25
 modified: 2026-11-15
 type: decision
-status: önerildi
+status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl, axi-lite, register-map]
 ---
 
 # ADR-015: Register Map ve Parametre Yükleme Protokolü
 
 ## Durum
-**Önerildi — Kişi B onayı bekliyor (2026-09-25).**
+**Kabul edildi — 2026-11-15 (Emin).** Öneri 2026-09-25; map v5'e kadar uygulanmış durumda (aşağıdaki ekler).
 
 Roadmap §6.5 register'ların *hangileri* olduğunu örnek olarak listeliyordu; offset, bit alanı,
 reset değeri ve yükleme protokolü tanımsızdı. `(M0, n, bias_q)` register dosyasının tile başına
@@ -20,10 +20,10 @@ yükleneceği değil. Bu ADR Roadmap §6.5'i örnek olmaktan çıkarıp bağlay�
 | Madde | Durum |
 |---|---|
 | `ERR_CFG_M0` zorunlu — yapılandırılmamış cihazı yakalayan tek guard | **Türetilmiş** — ADR-003'ün `n=0` yasallaşmasının doğrudan sonucu |
-| Shadow + açık `COMMIT` protokolü | Onay bekliyor |
-| Offset ve bit alanı düzeni | Onay bekliyor (konvansiyon) |
-| `PARAM_SRC` mux'ının şimdi konması | Onay bekliyor |
-| `BUSY` iken commit reddi (erteleme değil) | Onay bekliyor |
+| Shadow + açık `COMMIT` protokolü | Kabul edildi |
+| Offset ve bit alanı düzeni | Kabul edildi (konvansiyon) |
+| `PARAM_SRC` mux'ının şimdi konması | Kabul edildi |
+| `BUSY` iken commit reddi (erteleme değil) | Kabul edildi |
 
 ## Karar
 
