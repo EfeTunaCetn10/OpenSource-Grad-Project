@@ -8,6 +8,46 @@ offset + arithmetic shift yolu signed 64-bit; INT8 saturation yalnız output'tad
 Araç sürümü: **Vivado 2025.1** ([[ADR-001 Board ve Araç Sürümü|ADR-001]]), part
 `xc7z020clg400-1`.
 
+## Faz 6 güncellemesi (2026-11-15)
+
+Bu klasör ortak `main`'deki 2026-10-08 RTL'in **devamıdır**, ayrı bir tasarım değildir: aynı
+modül adları, aynı systolic-array çekirdeği. Aradaki fark ProjectPriv'de yapılan faz 2–6
+çalışmasıdır; dosyalar `systolic-array-8x8/` yerine `fpga/` altında durur.
+
+**Güncellenen modüller** (mevcut dosyalar, ilk commit):
+
+| Modül | Ne değişti |
+| --- | --- |
+| `accel_top` | Tek katman döngüsü: LeNet-5 ve v3-48 aynı donanımdan, yalnız register dizisiyle geçiyor. Abort/watchdog, STATUS/ERR_DETAIL |
+| `axi_lite_regs` | Register map v5 ([[ADR-015 Register Map ve Parametre Yükleme\|ADR-015]]): shadow/active, DP_CFG, LAYER_SWAP, `W_ADDR`/`W_DATA` ile çalışma zamanında ağırlık yükleme, `irq` |
+| `act_buffer` | Ping-pong, HWC okuma akışı, katman başına swap, karışık geometri reddi |
+| `conv1_top`, `window_gen`, `line_buffer` | Çalışma zamanı geometri (`cfg_*` + `*_MAX` envelope: 48×48, kernel 5, pad 2, [[ADR-019 Geometry Envelope ve Model Geometry Kararı\|ADR-019]]) |
+| `weight_feeder` | Runtime ağırlık yazma portu (`wr_en/wr_bank/wr_addr/wr_data`, [[ADR-012 Çalışma Zamanında Ağırlık Yükleme\|ADR-012]]) |
+
+**Yeni modüller ve dosyalar** (ikinci commit):
+
+| Yeni | Ne |
+| --- | --- |
+| `rtl/pool2x2.sv` | 2×2 stride-2 max pool, akış INT8, runtime geometri |
+| `rtl/accel_axis.sv`, `rtl/accel_axis_wrapper.v` | `accel_top` etrafında AXI4-Lite + AXI-Stream kabuğu ve Vivado block design için Verilog sarmalayıcı |
+| `model/netprog.py`, `model/regmap.json`, `model/gen_*.py` | Model JSON → pass programı (`.prog`) ve golden vektörler; register map tek kaynaktan üretilir (`gen_regmap.py` → `sw/common/accel_regs.{h,py}`) |
+| `sw/pynq/` | PYNQ sürücüsü (program yürütücü) ve host mock testi, bkz. [`sw/pynq/README.md`](sw/pynq/README.md) |
+| `vivado/build_bd.tcl` | Block design: PS7 + AXI DMA + `accel_axis` (PYNQ-Z2 preset) |
+| `k3/` | Kademe 3: PS7 VIP + DMA ile tam v3 ağı koşusu |
+| `tb/tb_axis_*`, `tb_sys_*`, `tb_prog_e2e`, `tb_v3_e2e`, `tb_lenet_e2e`, `tb_fc*`, `tb_pool2x2` | Yeni testbench'ler; kontrat test kimlikleri [`docs/TEST-MATRISI.md`](docs/TEST-MATRISI.md)'de |
+| `docs/` | Lane raporları, durum raporu, delegasyon kaydı: dizin için [`docs/README.md`](docs/README.md) |
+
+**Durum:** `python sim/run_tests.py` ile 25/25 PASS (`fpga/` içinden, XSim 2025.1). Tam v3 ağı
+Kademe 3'te (PS7 VIP + DMA) `passes=27`, sınıf 3 ile PASS. Implementation: WNS +0,555 ns /
+WHS +0,008 ns @ 100 MHz, CDC temiz; `accel.bit` + `accel.hwh` üretildi.
+
+**Henüz yapılmayanlar:** gerçek DDR okuması ve kartta çalıştırma (Kademe 4); Kademe 3 karşılaştırması
+HP0 yazma yakalamasından yapılıyor çünkü Vivado 2025.1 PS7 VIP'i her HP0 yazmasında DDR'a bir
+önceki işlemi işliyor ([`docs/LANE-RAPOR-V6.md`](docs/LANE-RAPOR-V6.md)). Gerçek ağırlıklar bu
+repoda yok, doğruluk (accuracy) RTL'de ölçülmedi.
+
+Aşağıdaki "İçerik" bölümü 2026-10-07 durumunu anlatır ve yukarıdaki tabloyla birlikte okunmalıdır.
+
 ## İçerik
 
 ### RTL — sentez top'una bağlı
@@ -46,12 +86,11 @@ address generator henüz yazılmadı, requant stream'i doğrudan dışarı çık
   ve sekiz lane'lik lockstep sarmalayıcısı. `LAT = 5` artık ölçülmüş
   ([[ADR-014 Requantizer Port ve Zamanlama Sözleşmesi|ADR-014]]).
 
-### RTL — hâlâ hiçbir top'a bağlı değil
+### RTL — AXI4-Lite register file (2026-10-07 notu; faz 6'da `accel_top`'a bağlandı)
 
 - `rtl/axi_lite_regs.sv`: [[ADR-015 Register Map ve Parametre Yükleme|ADR-015]] AXI4-Lite
-  register file'ı — shadow + commit protokolü, `ERR_CFG_M0`, W1C bitleri. Birim testi yeşil
-  ama datapath'e bağlayan sarmalayıcı yazılmadı, yani sentez ve STA kapsamı dışında.
-  `conv1_top`'un `cfg_*` portlarını Aşama 1'de testbench sürüyor.
+  register file'ı — shadow + commit protokolü, `ERR_CFG_M0`, W1C bitleri. 2026-10-07'de
+  henüz hiçbir top'a bağlı değildi; artık `accel_top` içinde ve `accel_axis` kabuğuyla sentezleniyor.
 
 ### Testbench'ler
 
@@ -123,7 +162,7 @@ Bir test ancak XSim 0 ile çıkar, çıktısında `PASS` bulunur ve hiçbir hata
 bulunmazsa yeşil sayılır — hata yokluğu tek başına başarı sayılmaz. Vivado yolu
 `$VIVADO_BIN`, `$XILINX_VIVADO/bin` veya bilinen kurulum yollarından bulunur.
 
-Son durum (2026-10-07): **10/10 PASS** (XSim 2025.1).
+Son durum (2026-11-15): **25/25 PASS** (XSim 2025.1). Önceki durum (2026-10-07): 10/10.
 
 > **Not:** ADR-009 başlangıçta cocotb + Icarus seçmişti çünkü Vivado'nun bulunmadığı
 > varsayılmıştı. Vivado kurulu ve XSim hem SystemVerilog assertion'larını hem şifreli
