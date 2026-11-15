@@ -1,0 +1,107 @@
+Timing rework of two verified RTL modules. Working directory is a PRIVATE git worktree:
+C:\grad-win\systolic-array-8x8 (branch lane/window-timing). Everything you need is in it.
+
+## The measured problem (do not re-derive it, fix it)
+
+`vivado/check_synth_conv1.tcl` synthesized the conv1 integration top for the first time on
+2026-10-07, xc7z020clg400-1 at 100 MHz, and it fails timing badly:
+
+```
+WNS -33.324 ns, 3935 failing endpoints, TNS -112,987 ns   (80 DSP48 is correct)
+Source:      u_window/k_count_reg[0]/C
+Destination: u_engine/u_array/g_row[0].g_col[0].u_pe/acc_reg_reg/B[1]
+Data Path Delay: 42.790 ns  (logic 20.461 / route 22.329)
+Logic Levels: 67  (CARRY4=38, LUT1=1, LUT2=4, LUT3=5, LUT4=1, LUT5=7, LUT6=9, MUXF7=2)
+```
+
+Every cell on that path is inside `u_window` (window_gen + its line_buffer). The full report
+is at `reports/conv1_timing_summary.rpt` -- read it. For scale: the compute core alone makes
++3.074 ns and `requant_array` makes +3.380 ns, so the entire violation is in these two
+modules, which had never been synthesized before.
+
+Three compounding causes, all verified by reading the code:
+
+1. **32-bit `integer` divide and modulo in combinational logic.**
+   `rtl/window_gen.sv` derives its indices from the beat counter every cycle:
+   `ci_index = k_count / (K_H*K_W)`, `kh_index = (k_count / K_W) % K_H`,
+   `kw_index = k_count % K_W` -- with `k_count` declared `integer`. K_H=K_W=5, so these are
+   real dividers, not shifts. The 38 CARRY4 chain comes from here and from the same pattern
+   in `rtl/line_buffer.sv`: `frame_byte_count / ROW_BYTES`, `% ROW_BYTES` (ROW_BYTES = 96 for
+   conv1, not a power of two), plus `(rd_row % K_H) * BYTE_GROUPS` on the read side.
+   All of those temporaries are `integer`, i.e. 32 bits wide, where the real values need 6-13.
+2. **`line_buffer` is read combinationally.** `rd_byte = byte_mem[rd_bank][rd_addr]` sits in
+   an `always_comb`, so `ram_style = "block"` cannot be honoured: synthesis built the ring as
+   flip-flops (measured: 3951 LUT + 3985 FF, 0 BRAM) and the read became a mux tree over
+   those registers -- inside the same combinational cone as the dividers above.
+3. Because of 1 and 2 the address arithmetic, the memory read and the gather all land in one
+   cycle.
+
+## What to change
+
+`rtl/window_gen.sv` and `rtl/line_buffer.sv` -- those two files only.
+
+- Replace every divide/modulo whose operand advances sequentially with counters. `k_count`
+  increments by one per beat and the mapping `k -> (ci, kh, kw)` is lexicographic
+  (`k = ci*(K_H*K_W) + kh*K_W + kw`), so three nested counters reproduce it exactly with an
+  adder and a compare. Same for `line_buffer`'s write side: keep a byte-in-row counter that
+  wraps at ROW_BYTES, a row counter, and a ring-slot counter that wraps at K_H, instead of
+  dividing a running byte count.
+- Size every signal to its real range. `integer` (32 bit) temporaries for values that need
+  6-13 bits are most of the CARRY4 cost. Keep `m_k` 32 bits -- that is a port -- but drive it
+  from a correctly sized counter.
+- Make the `line_buffer` read **synchronous**: registered address in, registered data out, so
+  the array can actually infer block RAM. The read latency this adds must be absorbed inside
+  `window_gen`'s gather stage -- issue the address for lane L and capture lane L-1's data,
+  which costs one extra cycle per output beat (the generator already needs about nine; ten is
+  acceptable and is not what this task is optimizing).
+- Keep the division by a small constant only where the operand is NOT sequential and the
+  operand is already narrow (for example `rd_row % K_H` on a 6-bit row index is a small LUT,
+  not a divider). Do not contort the code to remove cheap, narrow logic; remove the 32-bit
+  chains.
+
+## Hard constraints
+
+- **The external port list of `window_gen` must not change at all.** `rtl/conv1_top.sv` and
+  `tb/tb_window_gen.sv` instantiate it and are out of your scope. `line_buffer` is internal
+  to `window_gen`, so its ports may change as long as `window_gen`'s do not.
+- **Numerical behaviour must not change.** `model/window_ref.py` is the contract: beat order
+  output-row -> eight-column tile -> `k = ci*(K_H*K_W) + kh*K_W + kw`, eight INT8 lanes per
+  beat, inactive lanes of a partial right-edge tile zero, `PAD = 0` for Stage 1. Zero padding
+  stays modelled the way it is today.
+- `allow_input` / `resume_write` / `write_busy` / `rows_written` / `frame_done` semantics stay
+  as they are: a beat may finish a row mid-beat and the ring must not be overwritten while an
+  output row still needs it. Read the comments in both files before touching that logic --
+  that interlock is load-bearing and was paid for once already.
+- Stay synthesizable and keep the house style: English comments, `always_ff`/`always_comb`,
+  explicit reset of every register, SVA for contracts, no `#delay` in RTL.
+- Do not touch anything else: no other `rtl/` file, nothing in `tb/`, `model/`, `sim/`,
+  `vivado/`. If you find a defect elsewhere, report it, do not fix it.
+
+## Proof required -- all three, and report the real numbers
+
+1. `python sim/run_tests.py` must stay **10/10 PASS**. `tb_window_gen` checks the generator
+   against the Python golden and `tb_conv1_top` checks the whole conv1 datapath bit-exact
+   (112 tiles, 784 output beats plus 784 INT32 accumulator beats). Those two are your
+   equivalence proof -- if they both still pass, the rework did not change behaviour.
+   Vivado is installed; if `xvlog` is not on PATH use
+   `VIVADO_BIN=C:\Vivado\2025.1\Vivado\bin`.
+2. Re-run the synthesis gate and paste its lines:
+   `vivado -mode batch -notrace -source vivado/check_synth_conv1.tcl`
+   (full path `C:\Vivado\2025.1\Vivado\bin\vivado.bat` if `vivado` is not on PATH). It prints
+   DSP_CHECK, WNS_CHECK, MEM_REPORT and WEIGHT_PATH_CHECK. **The gate will still fail on the
+   weight-bank check -- that is a different defect being fixed in parallel by someone else and
+   is NOT yours.** What matters from your run: WNS and the RAMB36/RAMB18 counts. Report the
+   new critical path from `reports/conv1_timing_summary.rpt` (source, destination, delay,
+   logic levels) even if it now passes, because the next bottleneck is useful information.
+   One synthesis run takes several minutes; budget for two, not ten.
+3. Report the resource change for `window_gen` and `line_buffer` from
+   `reports/conv1_utilization_hier.rpt` against the measured baseline
+   (`window_gen` 6148 LUT / 4176 FF total, of which `line_buffer` 3951 LUT / 3985 FF, 0 BRAM).
+
+If you cannot reach non-negative WNS, say exactly how far you got and what the remaining
+path is -- a partial fix with an honest number is useful; a claimed pass is not. Do not
+report a result you did not run.
+
+End with a short report: what you changed and why, the regression line, the WNS before and
+after, the new critical path, the resource delta, every assumption you made, and anything
+wrong you found in code outside your two files.

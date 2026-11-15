@@ -1,0 +1,3 @@
+Memo hazır: [ADR-018-layout-karar-memosu.md](C:/codex-ctx/ADR-018-layout-karar-memosu.md)
+
+**Öneri: Option 2 — padded tile-major.** Fixed LeNet-5 Stage 1 için `requant_array` beat’ini tek aligned 64-bit write ile saklar, bütün intermediate tensor’larda `TKEEP=all-1` invariant’ını korur ve 2×8 KiB ping-pong yalnız 630 KiB BRAM budget’ın `%2.54`’ünü kullanır. Bedeli; `line_buffer` içinde `C_LOGICAL`/`C_PHYS_STRIDE` ayrımı, Conv2’de 392 ek padding byte ve FC1 için tile-major weight transform’udur. Buna rağmen Option 1’in compaction/partial-beat belirsizliğinden ve Option 3’ün yeni backpressure-bearing adapter’ından daha küçük, daha doğrudan test edilebilir bir Stage 1 değişikliğidir. Eksik `b19-b20-layout.txt` kaynağı memo’da açıkça kaydedildi.
