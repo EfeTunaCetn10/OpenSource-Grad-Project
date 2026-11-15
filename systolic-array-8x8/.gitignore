@@ -12,3 +12,6 @@ vivado/*.log
 *.jou
 *.log
 dfx_runtime.txt
+k3/build/
+vivado/build/
+NA/
