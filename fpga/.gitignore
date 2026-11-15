@@ -12,3 +12,7 @@ vivado/*.log
 *.jou
 *.log
 dfx_runtime.txt
+sim/mutbuild_t6/
+k3/build/
+vivado/build/
+NA/

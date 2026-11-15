@@ -48,6 +48,19 @@ resolution with the RTL team; software exceptions do not define hardware
 failure behavior. Quantization boundaries and MAC+bias overflow handling also
 need agreement before final integration/export.
 
+## RTL / FPGA (Person B) — updated 2026-11-15
+
+The accelerator RTL lives in [`fpga/`](fpga/README.md). It is the continuation of
+the 2026-10-08 RTL already on `main` (same modules, same systolic core), not a
+separate design. Since then it gained a single-layer `accel_top` datapath, runtime
+geometry, register map v5 with runtime weight loading, a `pool2x2` module, an
+AXI4-Lite/AXI-Stream shell (`accel_axis`), a model-to-program packer, a PYNQ driver
+and a PS7 + AXI DMA block design. The regression is **25/25 PASS** (XSim 2025.1); the
+full v3 network passes in the PS7 VIP + DMA simulation and the design closes timing
+at 100 MHz (WNS +0.555 ns). It has **not** been run on the board, and accuracy has
+not been measured in RTL. See [`fpga/README.md`](fpga/README.md) and the report
+index [`fpga/docs/README.md`](fpga/docs/README.md).
+
 ## Reports and navigation
 
 - [Project abstract and current-version report](docs/PROJECT_STATUS_REPORT.md)

@@ -10,7 +10,7 @@
 // a memory with neither a write port nor an initialization is a constant to
 // synthesis, so the whole weight path is optimized away while simulation stays
 // green (measured 2026-10-07 before the port existed).  Bank r supplies weight_data lane r, and every bank is
-// read at the same registered address (tile_idx*k_len + k).
+// read at the same registered address (base + tile_idx*k_len + k).
 //
 // INIT_PREFIX (default "") is option (b) of the ADR-011-preload-karar-memosu
 // decision memo: a parametric $readmemh initial value per bank, the pure-RTL
@@ -57,6 +57,7 @@ module weight_feeder #(
 
     input  logic                        start,
     output logic                        ready,
+    input  logic [ADDR_W-1:0]           base,
     input  logic [TILE_W-1:0]           tile_idx,
     input  logic [K_W-1:0]              k_len,
 
@@ -68,8 +69,8 @@ module weight_feeder #(
     output logic                        cfg_error
 );
     localparam int WORD_W = ROWS * DATA_WIDTH;
-    localparam int BASE_W = TILE_W + K_W;
-    localparam int END_W  = BASE_W + 1;
+    localparam int OFFSET_W = TILE_W + K_W;
+    localparam int CALC_W = ((ADDR_W > OFFSET_W) ? ADDR_W : OFFSET_W) + 1;
 
     // One ONE-dimensional array per bank, declared inside a generate block.
     // A single two-dimensional `bank_mem [0:ROWS-1][0:DEPTH-1]` is functionally
@@ -83,8 +84,10 @@ module weight_feeder #(
     // ADR-011's eight physically separate banks one-to-one -- the eight .coe /
     // Block Memory Generator instances of that ADR drop into this same place.
 
-    logic [BASE_W-1:0] base_calc;
-    logic [END_W-1:0]  end_calc;
+    logic [ADDR_W-1:0]   base_effective;
+    logic [OFFSET_W-1:0] tile_offset_calc;
+    logic [CALC_W-1:0]   base_calc;
+    logic [CALC_W-1:0]   end_calc;
     logic [ADDR_W-1:0] base_reg;
     logic [ADDR_W-1:0] next_addr;
     logic [K_W-1:0]    len_reg;
@@ -108,15 +111,50 @@ module weight_feeder #(
     logic issue_read;
     logic last_accept;
 
-    // Share the sole multiplication between the registered base and the
-    // overflow guard.  Its result is sampled only on an accepted start.
+    // The start address and the overflow guard are precomputed in two
+    // registered stages from the quasi-static command inputs, so the
+    // multiply and the two adds never sit between tile_idx and the start
+    // edge (that path was -0.826 ns once base became a live input).  ready
+    // is held low until the inputs have been unchanged long enough for both
+    // stages to settle; layer_ctrl changes tile_idx/k_len only on
+    // frame_start, at least one cycle before it can assert start.
+    logic [ADDR_W+TILE_W+K_W-1:0] cmd_q;
+    logic [OFFSET_W-1:0]          tile_offset_q;
+    logic [ADDR_W-1:0]            start_addr_q;
+    logic                         cmd_bad_q;
+    logic [1:0]                   settle;
+    logic                         cmd_changed;
+
     always_comb begin
-        base_calc = $unsigned(tile_idx) * $unsigned(k_len);
-        end_calc  = {{(END_W-BASE_W){1'b0}}, base_calc}
-                    + {{(END_W-K_W){1'b0}}, k_len};
+        base_effective = base;
+        cmd_changed = ({base, tile_idx, k_len} != cmd_q);
+        base_calc = {{(CALC_W-ADDR_W){1'b0}}, base_effective}
+                    + {{(CALC_W-OFFSET_W){1'b0}}, tile_offset_q};
+        end_calc  = base_calc + {{(CALC_W-K_W){1'b0}}, k_len};
     end
 
-    assign ready        = !active;
+    always_ff @(posedge clk) begin
+        if (!rst_n) begin
+            cmd_q         <= '0;
+            tile_offset_q <= '0;
+            start_addr_q  <= '0;
+            cmd_bad_q     <= 1'b1;
+            settle        <= '0;
+        end else begin
+            cmd_q         <= {base, tile_idx, k_len};
+            tile_offset_q <= $unsigned(tile_idx) * $unsigned(k_len);
+            start_addr_q  <= base_calc[ADDR_W-1:0];
+            cmd_bad_q     <= (k_len == 0) || (int'(k_len) > K_MAX) ||
+                             (end_calc > CALC_W'(DEPTH));
+            if (cmd_changed)
+                settle <= '0;
+            else if (settle != 2'd3)
+                settle <= settle + 1'b1;
+        end
+    end
+
+    assign tile_offset_calc = tile_offset_q;
+    assign ready        = !active && (settle == 2'd3) && !cmd_changed;
     assign weight_valid = (fifo_count != 0);
     assign weight_data  = fifo_data[fifo_rd_ptr];
     assign fifo_pop     = weight_valid && weight_ready;
@@ -152,12 +190,11 @@ module weight_feeder #(
             if (start && ready) begin
                 // A rejected command never enters active state, so the
                 // controller remains ready and cannot deadlock its caller.
-                if ((k_len == 0) || (int'(k_len) > K_MAX) ||
-                    (end_calc > END_W'(DEPTH))) begin
+                if (cmd_bad_q) begin
                     cfg_error <= 1'b1;
                 end else begin
-                    base_reg       <= base_calc[ADDR_W-1:0];
-                    next_addr      <= base_calc[ADDR_W-1:0];
+                    base_reg       <= start_addr_q;
+                    next_addr      <= start_addr_q;
                     len_reg        <= k_len;
                     reads_issued   <= '0;
                     beats_accepted <= '0;
