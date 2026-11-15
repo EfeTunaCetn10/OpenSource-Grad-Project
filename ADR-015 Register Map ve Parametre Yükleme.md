@@ -1,7 +1,7 @@
 ---
 title: ADR-015 Register Map ve Parametre Yükleme
 created: 2026-09-25
-modified: 2026-11-07
+modified: 2026-11-15
 type: decision
 status: önerildi
 tags: [dnn-accelerator, adr, kontrat, rtl, axi-lite, register-map]
@@ -288,3 +288,45 @@ kabul edilir; aynı katmanda farklı geometrili pass reddedilir (seq_error).
 **PS sözleşmesi ekleri:** TLAST_LATE ya da `dst_sel=1` iken abort sonrası ilgili DMA kanalı
 sıfırlanır/boşaltılır. FC katmanında `c_in ≤ c_phys = 8·önceki tile sayısı`; fazla lane'ler
 ağırlıklarda dışarıda bırakılır (ör. LeNet fc3: c_in 84, c_phys 88).
+
+## Ek madde — 2026-11-15: register map v5, ağırlık yükleme ve interrupt
+
+Kaynak: `faz6-shell` @ `bd844c1`, `rtl/axi_lite_regs.sv` başlık yorumu ve `model/regmap.json`
+(v5'ten itibaren alan tablosunun tek kaynağı; SV paketi, Python ve C başlıkları ondan üretilir,
+`model/gen_regmap.py --check`). Karar: [[ADR-012 Çalışma Zamanında Ağırlık Yükleme|ADR-012]],
+Emin onayı 2026-11-15. **v4'ün hiçbir alanı değişmedi**; v5 yalnız ekler:
+
+| Adres | Register | v5 | Not |
+|---|---|---|---|
+| 0x000 | VERSION | [15:0] = `0x0005` | |
+| 0x028 | **W_ADDR** | RW, [12:0] ADDR, [18:16] BANK, reset 0 | shadow **değil**, doğrudan |
+| 0x02C | **W_DATA** | WO, [7:0] DATA; okuma 0 döner | yazma darbesi + ADDR otomatik artar |
+
+**Ağırlık yazma protokolü.** `W_DATA` yazımı tek cycle'lık bir yazma darbesi üretir:
+`bank_mem[BANK][ADDR] = DATA`, ardından `ADDR <= ADDR + 1` (13 bit sarar, BANK değişmez). Bir
+banka: bir `W_ADDR` yazması + ardışık `W_DATA` yazmaları. `0x01C W_BASE` (v2) ile karıştırılmamalı:
+`W_BASE` pass'in okuma taban adresidir ve shadow/commit'e tabidir; `W_ADDR` yükleme imlecidir ve
+commit beklemez.
+
+**`BUSY` iken `W_DATA`:** yazma yapılmaz, ADDR artmaz, `ERROR[3]` (`ERR_CFG_WR_BUSY`) kalkar. v3
+ekindeki "ağırlıklar pass yokken yüklenir" PS yükümlülüğü böylece donanımda da zorlanıyor.
+
+**Neden shadow değil:** shadow+commit bir pass'in *konfigürasyonunu* atomik yapmak için var.
+Ağırlık bellek içeriğidir, on binlerce bayttır ve zaten `BUSY` dışında yazılabilir; shadow'lamak
+belleği ikiye katlar ve bir şey kazandırmaz.
+
+**Interrupt.** Yeni çıkış portu `irq = CONTROL.IRQ_EN && STATUS.DONE` (seviye duyarlı; `DONE`'ın
+W1C'siyle ya da `IRQ_EN = 0` ile düşer). `CONTROL[2] IRQ_EN` bu ADR'nin ilk tablosunda vardı ama
+bir çıkışa bağlı değildi. Abort ile biten pass de `DONE` kurduğu için interrupt üretir; PS
+`STATUS.ABORTED` ve `ERROR`'a bakarak ayırır. Blok tasarımda `IRQ_F2P[2]`'ye bağlı (`[0]` DMA
+MM2S, `[1]` DMA S2MM).
+
+**Port düzeyi.** `accel_top`'un çıplak `w_wr_*` giriş portları duruyor ve register kaynaklı
+yazmayla mux'lanıyor (`w_wr_en` yüksekse dış port kazanır); AXIS kabukta (`accel_axis`) 0'a
+bağlılar. Adres penceresi blok tasarımda `0x43C0_0000`, 64 KiB.
+
+**PS sözleşmesi ekleri:** sürücü `VERSION[15:0] == 0x0005` kontrol eder; ağırlık yüklemesinden
+sonra `ERROR[3]`'e bakar; `W_DATA` geri okunamaz (yüklenen ağırlığın PS'ten doğrulaması yok).
+
+Doğrulama: `tb_axi_lite_regs` (VERSION), `tb_axis_shell` (yükleme, `BUSY` iken ret, irq),
+`tb_prog_e2e` ve Kademe 3 (tam ağ yalnız bu register'larla yüklenip koşuyor).
