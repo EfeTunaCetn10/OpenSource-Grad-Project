@@ -1,0 +1,77 @@
+You are agent A on a two-agent parallel RTL task. Your working directory is a PRIVATE git
+worktree: C:\grad-wf\systolic-array-8x8 (branch lane/weight_feeder). Another agent is working
+on the sibling module in a different worktree at the same time, so stay strictly inside your
+own two files.
+
+FIRST read the binding seam contract: C:\codex-ctx\seam-contract.md
+It fixes the module name, the parameter list, every port name/width and the semantics. It is
+not negotiable - the integration top is already written against it. Read it fully before you
+write a line.
+
+YOUR DELIVERABLE - exactly two new files, nothing else:
+  C:\grad-wf\systolic-array-8x8\rtl\weight_feeder.sv
+  C:\grad-wf\systolic-array-8x8\tb\tb_weight_feeder.sv
+
+Module A in the contract is yours (`weight_feeder`). In one sentence: it is the weight edge of
+the compute engine - 8 BRAM banks holding ADR-011-ordered INT8 weights, one bank per engine
+row, streaming `k = 0..k_len-1` for one output-channel tile, with the same bank-local address
+`tile_idx*k_len + k` broadcast to all 8 banks, into a handshake whose `ready` is coupled to a
+second source that starves constantly.
+
+Before writing, read these existing files so your block actually fits:
+  rtl/compute_engine.sv      (the consumer - note `pair_ready`: weight_ready is asserted ONLY
+                              when BOTH edges are valid and state==FEED. Your `weight_valid`
+                              will be held unaccepted for long stretches.)
+  rtl/requant_array.sv       (house pattern for a skid/FIFO-backed streaming block written
+                              for this project, including its assertion style)
+  tb/tb_requant_array.sv     (house testbench pattern: phases, LFSR instead of seeded
+                              $urandom, the final PASS line format)
+  tb/tb_window_gen.sv        (shows how a tb drives the engine and loads memory)
+  rtl/line_buffer.sv         (house pattern for inferred BRAM with ram_style)
+  sim/run_tests.py           (the runner; read how it decides PASS/FAIL - absence of failure
+                              is NOT success, it greps for a PASS token and fails on any
+                              error marker)
+
+ENGINEERING POINTS THAT WILL DECIDE WHETHER THIS IS ANY GOOD:
+- Synchronous BRAM read latency versus a ready that drops unpredictably. A naive
+  "address counter + registered read data" loses a word or inserts a bubble per beat. Solve
+  it properly (prefetch with a skid stage, or a small output-registered FIFO); state in a
+  header comment which scheme you chose and why it cannot lose or duplicate a word.
+- `weight_valid` must be able to stay high back-to-back at full rate, and `weight_data` must
+  be stable while `weight_ready` is low. Assert both with SVA.
+- The `cfg_error` guard must not hang the block: bad geometry returns to idle, it does not
+  stream garbage and does not deadlock the engine.
+- Keep it synthesizable at 100 MHz on xc7z020: one multiplier at `start` only, no
+  multi-cycle combinational chains, BRAM address path registered. You are NOT asked to run
+  synthesis (Vivado synthesis is expensive and the integration top does not exist yet), but
+  do not write anything that obviously will not make timing, and note in your report any
+  construct you think deserves a later STA look.
+
+VERIFICATION - do not skip and do not downgrade:
+  python sim/run_tests.py
+must pass for the FULL set (the 7 tests already in the repo plus your new one = 8). Vivado is
+installed; if `xvlog` is not on PATH, set VIVADO_BIN - try these in order:
+  C:\Vivado\2025.1\Vivado\bin   then   C:\Xilinx\Vivado\2025.1\bin
+Run the regression yourself and paste the real result. Do not claim a pass you did not see.
+If the toolchain genuinely cannot run, say so explicitly in your report instead of guessing -
+an unverified module is worse than a reported blocker.
+
+Testbench phases required (contract section "Verification requirement"): backpressure of 1 /
+2 / many cycles, consecutive tiles with DIFFERENT k_len and different tile_idx (prove the
+base address restarts correctly for every tile - a single-tile testbench hides exactly the
+bug that matters here), full-rate streaming with no stall, and each `cfg_error` condition.
+Check the DATA, not just the handshake: preload the 8 banks with a known pattern that makes a
+bank/address swap detectable (for example `bank_mem[r][a] = f(r,a)` with a function where
+swapping r and a changes the value) and verify every accepted beat byte-by-byte against the
+expected `(bank, tile_idx*k_len + k)` value. A testbench that only counts beats would pass
+with the lanes wired backwards, and wiring the weight edge backwards produces a silently
+transposed convolution.
+
+Then mutation-test your own module: at least 4 single-line mutations (off-by-one on the beat
+counter, base address without the tile offset, valid dropped under backpressure, prefetch
+depth wrong, two banks swapped). Confirm the testbench FAILS for each, revert, and report
+caught vs survived. Report a surviving mutant as a finding.
+
+Report at the end: the scheme you chose for the read-latency/backpressure problem, the exact
+regression line, the mutation table, your assumptions, and anything wrong you noticed in the
+EXISTING code (report only - do not fix it, it is outside your two files).

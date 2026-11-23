@@ -1,0 +1,95 @@
+You are advising a graduation project on an FPGA CNN accelerator contract decision:
+Zynq-7020 (xc7z020clg400-1), 8x8 output-stationary systolic array, K-streaming, LeNet-5,
+INT8 weights/activations with INT32 accumulators, 100 MHz, Vivado 2025.1 / XSim.
+Stage 1 goal is bit-exact correctness in simulation, not peak performance.
+
+READ FIRST - these are real files, read them, do not guess their content:
+- C:\grad-rtl\ADR-018 K-Streaming ve Ara Aktivasyon Duzeni.md  (use tab completion / ls if
+  the name does not match exactly - the directory C:\grad-rtl holds all the ADRs; the files
+  have Turkish names with diacritics)
+- C:\grad-rtl\ADR-016 ... Aktivasyon Tensor Duzeni ve Byte Yerlesimi
+- C:\grad-rtl\ADR-011 ... Agirlik Bellek Adresleme
+- C:\grad-rtl\ADR-006 ... AXI Stream Paket Semantigi
+- C:\grad-rtl\ADR-002 ... CNN Topolojisi ve Dataset
+- C:\grad-rtl\systolic-array-8x8\rtl\window_gen.sv
+- C:\grad-rtl\systolic-array-8x8\rtl\line_buffer.sv
+- C:\grad-rtl\systolic-array-8x8\rtl\compute_engine.sv
+- C:\grad-rtl\systolic-array-8x8\rtl\requant_array.sv
+- C:\grad-rtl\systolic-array-8x8\model\window_ref.py
+- C:\codex-ctx\b19-b20-layout.txt  (extracted study-workbook sections B18/B19/B20/B36 with
+  worked index examples; read these carefully, they already contain concrete address
+  computations you should reuse rather than redo)
+
+Reading the ADR text is not enough on its own: ADR-018's Decision 2 is written as a proposal
+awaiting approval, and the question below is exactly the part it does not settle.
+
+THE OPEN DECISION - the only thing you must decide:
+
+What is the PHYSICAL byte layout of the on-chip intermediate activation buffer - the memory
+that `requant_array` output is written into, and that `window_gen`/`line_buffer` later reads
+back as the next layer's input (and that FC1 eventually reads as a flat vector)?
+
+The candidates:
+  1. Dense HWC, no channel padding:  addr = (h*W + w)*C + c
+  2. Padded tile-major (ADR-018's proposal): addr = (((c/8)*H + h)*W + w)*8 + (c%8)
+  3. Hybrid: store padded tile-major, but read through a gather/adapter that presents dense
+     HWC to window_gen and to the FC1 weight order (or the mirror of that)
+  You may propose a fourth if the files justify it, but then you must cost it like the rest.
+
+For the SAME conv1 output element the two addressings differ (the workbook extract gives a
+worked case where the same output lands at address 188 vs 250) - so this is not cosmetic,
+and picking it late means rewriting an address generator plus the model-side export.
+
+EVALUATE against the following, with concrete numbers wherever the files let you derive them.
+Show the formula for any number you derive; never invent a measurement:
+ 1. Write side: `requant_array` emits 8 lanes (= 8 output channels) of ONE output column per
+    beat, with a contiguous active-lane mask and an `out_col` index. Which layout makes that
+    beat a contiguous store, and which one scatters it? Count write ports / cycles per beat.
+ 2. Read side: `line_buffer` + `window_gen` today address activations as `w*C_IN + ci`
+    (read the code to confirm) and the C_IN parameter is logical, not physical. What exactly
+    breaks for conv2 under each option (pool1 output: 14x14x6 = 1176 dense bytes vs 1568
+    padded bytes), and what is the minimal RTL change in each case?
+ 3. Does padding change the mathematical K? (Conv2 K = 6*25 = 150 logically.) Spell out how
+    an address generator must separate logical channel count from physical channel stride,
+    and what goes wrong numerically if it does not.
+ 4. FC1: ADR-016 closes the flatten-order mismatch with a one-line PyTorch permute; the
+    workbook extract shows that this one-liner is NOT the right transform if FC1 is fed
+    physical tile-major order. State, per option, exactly which export-side transform Person A
+    must apply, and which option keeps the already-accepted ADR-011 "no permutation for conv
+    weights" promise intact.
+ 5. Byte / BRAM cost per option for the full LeNet-5 intermediate set (the ADR has the
+    tensor table), against the Zynq-7020 budget of 140 x 36 Kb = 630 KB, including the
+    ping-pong doubling.
+ 6. The 64-bit AXI-Stream beat and ADR-006's "TKEEP functionally all ones" invariant: which
+    option keeps every tensor row a whole multiple of 8 bytes, and which forces partial
+    beats or a packer?
+ 7. RTL cost and complexity: who needs a divide/modulo, how wide the multipliers get, whether
+    the address generator stays a simple incrementer for the common case.
+ 8. Silent-corruption risk: for each option, name the failure that produces a correctly
+    shaped, correctly sized output tensor with wrong values and no error flag - and say which
+    acceptance test would catch it.
+ 9. Stage 2 exposure: FC K-split across the dead column axis, padding support (pad != 0), and
+    adding layers. Which option makes those cheaper, which one makes them a rewrite?
+
+DELIVERABLE: write the file C:\codex-ctx\ADR-018-layout-karar-memosu.md, in TURKISH, but keep
+every technical/English term in its original English form (do not translate terms like
+dense HWC, tile-major, line buffer, backpressure, address generator, permute, stride,
+ping-pong, requant). Tone: direct, high signal, no filler, no corporate padding. The reader
+is the project owner, an electronics engineering student who knows this codebase well and is
+making the call today.
+
+Structure:
+- `# Karar sorusu` - 2-3 sentences, what exactly is being decided and what it blocks
+- `## Secenekler` - one comparison table, rows = criteria 1-9 above, columns = the options
+- `## Secenek 1 ...`, `## Secenek 2 ...`, `## Secenek 3 ...` - each with `### Artilar` and
+  `### Eksiler` as bullet lists carrying the numbers
+- `## Capraz etkiler` - FC1 export, conv2 replay, window_gen/line_buffer, DMA input frame
+- `## ONERI` - pick exactly ONE option. Say why, and state plainly what it costs and what it
+  gives up. One paragraph, then a 3-5 item "bunu secerse yapilacaklar" list (concrete code /
+  doc / export actions).
+- `## Bu karari gecersiz kilacak sey` - the evidence that would flip the recommendation
+- `## Dogrulanmamis varsayimlar` - everything you could not verify in the files, explicitly.
+  Do not paper over a gap; an honest open item is worth more than a confident guess here.
+
+Keep it under roughly 250 lines. Also print the recommendation and its one-paragraph
+rationale as your final message.

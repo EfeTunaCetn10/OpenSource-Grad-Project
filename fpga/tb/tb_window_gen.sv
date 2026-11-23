@@ -6,7 +6,8 @@ module tb_window_gen;
     logic rst_n;
 
     // ------------------------------------------------------------------
-    // Four real parameter sets plus the FC-as-1x1 case:
+    // Four real geometries plus the FC-as-1x1 case, all on the default
+    // envelope; the geometry is driven through the runtime cfg_* ports:
     //   u_c1   conv1 input, 32x32, C_LOGICAL = C_PHYS_STRIDE = 3
     //   u_c2   conv2 input stored DENSE, 14x14, 6/6
     //   u_c2p  conv2 input stored PADDED tile-major, 14x14, 6/8
@@ -42,24 +43,37 @@ module tb_window_gen;
     logic [3:0] fc_ac;
     logic [31:0] fc_k, fc_row, fc_x;
 
-    window_gen #(.K_H(5), .K_W(5), .C_LOGICAL(3), .IN_W(32), .IN_H(32), .STRIDE(1)) u_c1 (
-        .clk(clk), .rst_n(rst_n), .restart(1'b0), .restart_error(c1_rerr),
+    logic c1_cerr, c2_cerr, c2p_cerr, fc_cerr;
+
+    window_gen u_c1 (
+        .clk(clk), .rst_n(rst_n),
+        .cfg_in_h(6'd32), .cfg_in_w(6'd32), .cfg_c_in(9'd3), .cfg_c_phys(9'd3),
+        .cfg_kh(3'd5), .cfg_kw(3'd5), .cfg_pad(2'd0), .cfg_error(c1_cerr), .k_len(),
+        .restart(1'b0), .restart_error(c1_rerr),
         .s_valid(c1_sv), .s_ready(c1_sr), .s_data(c1_sd), .s_last(c1_sl),
         .m_valid(c1_mv), .m_ready(c1_mr), .m_data(c1_md), .m_active_cols(c1_ac), .m_k(c1_k),
         .m_tile_row(c1_row), .m_tile_x(c1_x), .m_tile_start(c1_start), .m_tile_last(c1_last), .done(c1_done));
-    window_gen #(.K_H(5), .K_W(5), .C_LOGICAL(6), .IN_W(14), .IN_H(14), .STRIDE(1)) u_c2 (
-        .clk(clk), .rst_n(rst_n), .restart(1'b0), .restart_error(c2_rerr),
+    window_gen u_c2 (
+        .clk(clk), .rst_n(rst_n),
+        .cfg_in_h(6'd14), .cfg_in_w(6'd14), .cfg_c_in(9'd6), .cfg_c_phys(9'd6),
+        .cfg_kh(3'd5), .cfg_kw(3'd5), .cfg_pad(2'd0), .cfg_error(c2_cerr), .k_len(),
+        .restart(1'b0), .restart_error(c2_rerr),
         .s_valid(c2_sv), .s_ready(c2_sr), .s_data(c2_sd), .s_last(c2_sl),
         .m_valid(c2_mv), .m_ready(c2_mr), .m_data(c2_md), .m_active_cols(c2_ac), .m_k(c2_k),
         .m_tile_row(c2_row), .m_tile_x(c2_x), .m_tile_start(c2_start), .m_tile_last(c2_last), .done(c2_done));
-    window_gen #(.K_H(5), .K_W(5), .C_LOGICAL(6), .C_PHYS_STRIDE(8),
-                 .IN_W(14), .IN_H(14), .STRIDE(1)) u_c2p (
-        .clk(clk), .rst_n(rst_n), .restart(c2p_restart), .restart_error(c2p_rerr),
+    window_gen u_c2p (
+        .clk(clk), .rst_n(rst_n),
+        .cfg_in_h(6'd14), .cfg_in_w(6'd14), .cfg_c_in(9'd6), .cfg_c_phys(9'd8),
+        .cfg_kh(3'd5), .cfg_kw(3'd5), .cfg_pad(2'd0), .cfg_error(c2p_cerr), .k_len(),
+        .restart(c2p_restart), .restart_error(c2p_rerr),
         .s_valid(c2p_sv), .s_ready(c2p_sr), .s_data(c2p_sd), .s_last(c2p_sl),
         .m_valid(c2p_mv), .m_ready(c2p_mr), .m_data(c2p_md), .m_active_cols(c2p_ac), .m_k(c2p_k),
         .m_tile_row(c2p_row), .m_tile_x(c2p_x), .m_tile_start(c2p_start), .m_tile_last(c2p_last), .done(c2p_done));
-    window_gen #(.K_H(1), .K_W(1), .C_LOGICAL(400), .IN_W(1), .IN_H(1), .STRIDE(1)) u_fc1 (
-        .clk(clk), .rst_n(rst_n), .restart(1'b0), .restart_error(fc_rerr),
+    window_gen u_fc1 (
+        .clk(clk), .rst_n(rst_n),
+        .cfg_in_h(6'd1), .cfg_in_w(6'd1), .cfg_c_in(9'd400), .cfg_c_phys(9'd400),
+        .cfg_kh(3'd1), .cfg_kw(3'd1), .cfg_pad(2'd0), .cfg_error(fc_cerr), .k_len(),
+        .restart(1'b0), .restart_error(fc_rerr),
         .s_valid(fc_sv), .s_ready(fc_sr), .s_data(fc_sd), .s_last(fc_sl),
         .m_valid(fc_mv), .m_ready(fc_mr), .m_data(fc_md), .m_active_cols(fc_ac), .m_k(fc_k),
         .m_tile_row(fc_row), .m_tile_x(fc_x), .m_tile_start(fc_start), .m_tile_last(fc_last), .done(fc_done));
@@ -789,6 +803,13 @@ module tb_window_gen;
 
         if (sentinel_hits != 0)
             errors = errors + sentinel_hits;
+
+        // Every geometry above is inside the envelope.
+        if (c1_cerr !== 1'b0 || c2_cerr !== 1'b0 || c2p_cerr !== 1'b0 || fc_cerr !== 1'b0) begin
+            $display("FAIL cfg_error raised for a legal geometry: c1=%b c2=%b c2p=%b fc=%b",
+                     c1_cerr, c2_cerr, c2p_cerr, fc_cerr);
+            errors = errors + 1;
+        end
 
         if (errors == 0)
             $display("PASS tb_window_gen");

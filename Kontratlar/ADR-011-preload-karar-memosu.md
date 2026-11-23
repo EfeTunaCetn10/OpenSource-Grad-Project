@@ -3,7 +3,7 @@ title: ADR-011 Preload Karar Memosu — .coe/BMG mi, $readmemh mi
 created: 2026-10-08
 modified: 2026-10-08
 type: decision-memo
-status: öneri (karar Emin'de)
+status: kabul edildi — 2026-10-09 (b) seçildi
 tags: [dnn-accelerator, adr, kontrat, rtl, weight-feeder]
 ---
 

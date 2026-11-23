@@ -1,7 +1,7 @@
 ---
 title: ADR-011 Ağırlık Bellek Adresleme
 created: 2026-08-28
-modified: 2026-10-07
+modified: 2026-10-09
 type: decision
 status: kabul edildi
 tags: [dnn-accelerator, adr, kontrat, rtl, ml]
@@ -29,7 +29,13 @@ ağırlığın BRAM'dan hangi sırayla okunup array'e ne zaman besleneceği.
 **Ağırlıklar PyTorch'un native `[out_channels, in_channels, kH, kW]` contiguous sırasıyla
 (dönüşümsüz) export edilecek; `c_out mod 8` ile 8 BRAM bankasına dağıtılacak (her banka bir
 array satırına/çıktı kanalına özel); banka-içi adres `t*K + k` formülüyle hesaplanacak;
-katman başına 8 adet `.coe` dosyası olarak Vivado Block Memory Generator'a yüklenecek.**
+bitstream'e gömülü başlangıç değeri `generate` bloğu içinde `$readmemh` ile yüklenecek.**
+
+> [!note] 2026-10-09 güncellemesi
+> Bu son madde 2026-08-28'de "katman başına 8 adet `.coe` dosyası olarak Vivado Block
+> Memory Generator'a yüklenecek" diyordu. `.coe` + BMG yolu ölçülerek değerlendirildi ve
+> elendi; gerekçe aşağıdaki **Ek madde — 2026-10-09**'da. Adresleme, banking ve port
+> kontratı değişmedi — değişen yalnız başlangıç değerinin bitstream'e nasıl girdiği.
 
 ## Detay
 
@@ -176,3 +182,62 @@ döngü değişkeniyle poke etmek zaten mümkün değil.
 doğrudan okuyacaksa doğru transform `reshape(120,2,8,5,5).permute(0,1,3,4,2)`'dir. Conv
 ağırlık export'u değişmiyor; bu ADR'nin `k = ci*(kH*kW) + kh*kW + kw` reduction order'ı ve
 "conv'da permütasyon yok" vaadi aynen geçerli.
+
+
+## Ek madde — 2026-10-09: preload yolu seçildi — `$readmemh`
+
+**Karar: (b) `generate` içinde `$readmemh` ile BRAM initialization.** 2026-10-07 ek
+maddesinin açık bıraktığı "preload yolu" maddesi bununla kapanıyor. `.coe` + Block Memory
+Generator yolu reddedilmedi, **bu projede gerekçesiz ek risk** olarak elendi.
+
+Tam karşılaştırma (dokuz kriter, ölçülen ile tahmin edilen ayrılmış hâlde)
+[[ADR-011-preload-karar-memosu]] dosyasında. Kararı belirleyen üç kriter:
+
+1. **Yeni toolchain adımı.** `.coe` yolu bugün repoda var olmayan en az üç adım istiyor:
+   `model/gen_conv1_vectors.py`'ye `.coe` çıkışı, BMG IP'sinin özelleştirilip projeye
+   eklenmesi, ve `sim/run_tests.py`'nin `sources()`'ına IP sim-model yolu desteği.
+   `$readmemh` yolunda **sıfır** yeni adım — `INIT_PREFIX` parametresi teslim edildi.
+2. **XSim uyumluluğu.** BMG'nin ürettiği davranışsal modeller `run_tests.py`'nin
+   `rtl/*.sv` + `tb/*.sv` glob'unun dışına (`<proj>.srcs/.../ip/`) düşer, yani runner'a
+   IP-kaynak desteği eklenmeden **simülasyon bugün hiç koşmaz**. `$readmemh` tarafı
+   `tb_weight_feeder_init` ile doğrulandı, runner'a dokunulmadı.
+3. **Ölçülmüş kazanımın korunması.** `$readmemh` ile RAMB36 = 16, DSP48 = 80,
+   WNS = +1,203 ns — 2026-10-07 ölçümüyle birebir aynı, iki ayrı sentezle teyitli
+   (`check_synth_conv1.tcl` ve bağımsız `wf_init_wrapper` probe'u). `.coe` tarafının
+   karşılık gelen sayıları **ölçülmedi**, genel BMG davranışından tahmin edildi.
+
+### Neden `.coe`'nun "daha endüstriyel" olduğu gerekçesi tutmadı
+
+Karar bir kez "`.coe` sektörde daha yaygın, öğrenmesi kariyer açısından daha kıymetli"
+gerekçesiyle (b)'nin aleyhine sorgulandı. Ayrım şurada netleşti: **BRAM ile `.coe` aynı
+şey değil.** BRAM merkezi ve bu tasarım onu zaten kullanıyor (ölçülmüş 16 RAMB36);
+`.coe` ise yalnızca Block/Distributed Memory Generator IP'sinin okuduğu, **Xilinx'e özel
+bir başlangıç değeri dosya formatı**. Modern RTL pratiğinin varsayılanı vendor IP wizard'ı
+değil **inferred memory**'dir (portability: aynı RTL Vivado'da RAMB36, Quartus'ta M20K,
+ASIC akışında SRAM macro olur) ve `$readmemh` IEEE 1800 standardının parçasıdır.
+
+Vendor IP tarafında gerçekten aktarılabilir beceri `.coe` yazmak değil, IP'yi `create_ip` /
+`generate_target` ile GUI'siz yönetmek ve `.xci`'yi version control'de doğru tutmaktır —
+ayrıca süreli bir egzersiz olarak yapılabilir, kritik yolu bloklaması gerekmez. Asıl
+endüstri pratiği ise üçüncü katman: **ağırlığı bitstream'e hiç gömmemek**, runtime'da
+DDR'dan AXI/DMA ile yüklemek. ASIC akışında `.coe` da `$readmemh` da yoktur, runtime load
+tek yoldur. Öğrenme yatırımı bu yüzden `.coe`'ya değil runtime load'a kaydırıldı:
+`🧠 500-Knowledge/Runtime Weight Load — Öğrenme Yolu ve Tercih Gerekçesi.md` (vault).
+
+### Değişmeyenler
+
+`wr_*` load portu (`wr_en`, `wr_bank`, `wr_addr`, `wr_data`) **kaldırılmıyor**;
+`ADR-012` (çalışma zamanında ağırlık yükleme) bu karardan bağımsız kalıyor. Init
+bitstream değerini koyar, `wr_*` onu runtime'da ezer; weight_feeder'ın beş mutant testi
+bu ikisinin birbirine karışmadığını gösterdi.
+
+### Bu kararın açık bıraktığı üç iş
+
+1. `conv1_top.sv`'nin `INIT_PREFIX`'i gerçek `c1_wbank` yoluna bağlaması — şu an
+   varsayılan `""`, yani init kodu hiç devreye girmiyor (bu yüzden regresyon da yok).
+2. Vivado tarafına "sentezden önce `.mem` üret" adımı: `vivado/create_project.tcl` (veya
+   CI script'i) senteze girmeden önce `python model/gen_conv1_vectors.py`'yi çağırmalı.
+   `sim` tarafını `run_tests.py`'nin `ensure_vectors()`'ı zaten çözüyor; **Vivado tarafı
+   hâlâ eksik** ve bu açığı `$readmemh` seçimi kapatmıyor.
+3. `sim/vectors/*.mem` gitignore'lu/üretilen kalmaya devam ediyor (`.gitignore:2`) —
+   generated-and-gitignored politikası korunuyor, `.coe`'nun bozacağı politika buydu.

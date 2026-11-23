@@ -13,6 +13,7 @@ rtl/weight_feeder.sv
 rtl/layer_ctrl.sv
 rtl/conv1_top.sv
 rtl/act_buffer.sv
+rtl/pool2x2.sv
 
 # AXI4-Lite control wrapper (vivado/check_synth_accel.tcl).
 rtl/axi_lite_regs.sv
