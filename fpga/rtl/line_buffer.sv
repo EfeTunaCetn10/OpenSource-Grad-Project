@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-// HWC line buffer: a ring of K_H rows in eight byte banks.  The bank is
+// HWC line buffer: a ring of K_H_MAX rows in eight byte banks.  The bank is
 // physical-row-byte modulo eight, so each bank is a plain byte memory with one
 // synchronous read port and one serialized write port.  The gather stage
 // issues one read per cycle; the registered result is returned one cycle
@@ -8,36 +8,32 @@
 //
 // AXIS beats are serialized because one beat can touch a bank several times
 // and can cross a row boundary (the padded conv2 row is 112 bytes).  The ring
-// is not overwritten until the current output row has drained, so K_H rows
-// suffice.
+// is not overwritten until the current output row has drained, so any ring of
+// at least cfg_kh rows suffices; K_H_MAX rows is the largest kernel.
 //
-// C_LOGICAL vs C_PHYS_STRIDE -- ADR-018 Decision 2, "Bedeli" items 1 and 2.
-// The intermediate activation layout is padded tile-major, so the byte
-// distance between two adjacent columns of one row is NOT the number of real
-// channels.  Conv1 input is 3/3, conv2 input is 6/8.  Before this split a
-// single C_IN carried both meanings at once:
+// Runtime geometry (faz3-param).  The frame height and the PHYSICAL row size
+// in bytes are quasi-static inputs: the caller changes them only between
+// frames.  cfg_row_bytes = in_w * c_phys is the caller's registered product
+// (ADR-018 Decision 2: the physical column stride is not the logical channel
+// count, see window_gen).  This module never multiplies, divides or takes a
+// modulo at runtime:
 //
-//     physical   ROW_BYTES     = IN_W * C_IN         (frame size, addressing)
-//     logical    rd_byte_index = rd_col*C_IN + rd_ch, and rd_ch < C_IN
-//
-// which is only correct when the two happen to be equal.  Unmodified, this
-// module consumed the first 1176 bytes of the 1568-byte physical conv2 frame
-// as the wrong (row, col, ch) triple and raised frame_done early.  The two
-// meanings are now separate parameters:
-//
-//     physical   ROW_BYTES     = IN_W * C_PHYS_STRIDE
-//                rd_byte_index = rd_col * C_PHYS_STRIDE + rd_ch
-//     logical    rd_ch < C_LOGICAL
-//
-// C_PHYS_STRIDE defaults to C_LOGICAL, so an unpadded instantiation (conv1,
-// the dense conv2 case and the FC-as-1x1 case) is bit-identical to before.
+//   * every ring row starts on a power-of-two pitch of ROW_PITCH words, so a
+//     bank address is {ring slot, byte group} -- concatenation, not slot*rows;
+//   * the read side is handed the ring slot and the physical byte offset
+//     directly.  The caller keeps both as wrap/increment counters, which
+//     replaces the former `rd_row % K_H` and `rd_col * C_PHYS` cones;
+//   * the end-of-row and end-of-frame compares use values re-registered every
+//     cycle from the quasi-static inputs, so they are register-to-register.
 module line_buffer #(
-    parameter int K_H           = 5,
-    parameter int C_LOGICAL     = 3,
-    parameter int C_PHYS_STRIDE = C_LOGICAL,
-    parameter int IN_W          = 32,
-    parameter int IN_H          = 32,
-    parameter int DATA_WIDTH    = 8
+    parameter int K_H_MAX       = 5,
+    parameter int IN_H_MAX      = 48,
+    parameter int ROW_BYTES_MAX = 512,
+    parameter int DATA_WIDTH    = 8,
+
+    parameter int ROW_W         = (IN_H_MAX < 1) ? 1 : $clog2(IN_H_MAX+1),
+    parameter int RING_W        = (K_H_MAX <= 1) ? 1 : $clog2(K_H_MAX+1),
+    parameter int BYTE_W        = (ROW_BYTES_MAX <= 1) ? 1 : $clog2(ROW_BYTES_MAX+1)
 ) (
     input  logic                           clk,
     input  logic                           rst_n,
@@ -45,6 +41,9 @@ module line_buffer #(
     // a fresh frame can be streamed in.  Defaulted so an instantiation that
     // predates this port is driven with a known value instead of 'z.
     input  logic                           clear = 1'b0,
+    // Quasi-static frame geometry: rows per frame and physical bytes per row.
+    input  logic [ROW_W-1:0]               cfg_in_h,
+    input  logic [BYTE_W-1:0]              cfg_row_bytes,
     input  logic                           allow_input,
     input  logic                           resume_write,
     input  logic                           s_valid,
@@ -52,51 +51,25 @@ module line_buffer #(
     input  logic [63:0]                    s_data,
     input  logic                           s_last,
     output logic                           write_busy,
-    output logic [$clog2(IN_H+1)-1:0]      rows_written,
+    output logic [ROW_W-1:0]               rows_written,
     output logic                           frame_done,
+    // rd_row is used only to check that the row has been written; rd_slot is
+    // its ring slot and rd_offset its physical byte offset inside the row.
     input  logic                           rd_en,
-    input  logic [$clog2(IN_H+1)-1:0]      rd_row,
-    input  logic [$clog2(IN_W+1)-1:0]      rd_col,
-    input  logic [$clog2(C_LOGICAL+1)-1:0] rd_ch,
+    input  logic [ROW_W-1:0]               rd_row,
+    input  logic [RING_W-1:0]              rd_slot,
+    input  logic [BYTE_W-1:0]              rd_offset,
     output logic                           rd_valid,
     output logic [DATA_WIDTH-1:0]          rd_byte
 );
-    localparam int ROW_BYTES     = IN_W * C_PHYS_STRIDE;
-    localparam int BYTE_GROUPS   = (ROW_BYTES + 7) / 8;
-    localparam int MEM_DEPTH     = K_H * BYTE_GROUPS;
-    localparam int ROW_W         = (IN_H < 1) ? 1 : $clog2(IN_H+1);
-    localparam int ROW_BYTE_W    = (ROW_BYTES <= 1) ? 1 : $clog2(ROW_BYTES);
-    localparam int BYTE_INDEX_W  = (ROW_BYTES <= 8) ? 3 : $clog2(ROW_BYTES);
-    localparam int MEM_ADDR_W    = (MEM_DEPTH <= 1) ? 1 : $clog2(MEM_DEPTH);
-    localparam int RING_W        = (K_H <= 1) ? 1 : $clog2(K_H);
+    localparam int GROUPS_MAX = (ROW_BYTES_MAX + 7) / 8;
+    // A group INDEX runs 0..GROUPS_MAX-1, so $clog2(GROUPS_MAX) is the right
+    // width here; it is also the log2 of the power-of-two row pitch.
+    localparam int PITCH_W    = (GROUPS_MAX <= 1) ? 1 : $clog2(GROUPS_MAX);
+    localparam int MEM_DEPTH  = K_H_MAX << PITCH_W;
+    localparam int MEM_ADDR_W = RING_W + PITCH_W;
 
-    localparam logic [ROW_W-1:0]        LAST_ROW          = IN_H - 1;
-    localparam logic [ROW_BYTE_W-1:0]   LAST_ROW_BYTE     = ROW_BYTES - 1;
-    localparam logic [RING_W-1:0]       LAST_RING_SLOT    = K_H - 1;
-    localparam logic [ROW_W-1:0]        IN_H_VALUE        = IN_H;
-    localparam logic [RING_W-1:0]       K_H_VALUE         = K_H;
-    localparam logic [BYTE_INDEX_W-1:0] C_PHYS_VALUE      = C_PHYS_STRIDE;
-    localparam logic [MEM_ADDR_W-1:0]   BYTE_GROUPS_VALUE = BYTE_GROUPS;
-
-    // A stride narrower than the channel count would let rd_byte_index run
-    // past the end of the row byte it belongs to and read the next column's
-    // bytes, so the relation is checked rather than assumed.  The generate
-    // block is the synthesis-time half: an illegal parameterisation
-    // instantiates a module that does not exist, which both Vivado synthesis
-    // and XSim elaboration report as a hard error.  A legal one elaborates
-    // nothing at all, so this costs no logic.
-    generate
-        if (C_PHYS_STRIDE < C_LOGICAL) begin : g_bad_stride
-            illegal_parameters_C_PHYS_STRIDE_below_C_LOGICAL u_guard ();
-        end
-    endgenerate
-`ifndef SYNTHESIS
-    initial begin
-        if (C_PHYS_STRIDE < C_LOGICAL)
-            $fatal(1, "line_buffer: C_PHYS_STRIDE=%0d is below C_LOGICAL=%0d",
-                   C_PHYS_STRIDE, C_LOGICAL);
-    end
-`endif
+    localparam logic [RING_W-1:0] LAST_RING_SLOT = K_H_MAX - 1;
 
     // The ring lives in eight ONE-dimensional arrays declared in the generate
     // block near the bottom, not in one byte_mem [0:7][0:MEM_DEPTH-1]:
@@ -105,14 +78,11 @@ module line_buffer #(
     // LUT + 3985 FF with a combinational read, and still 7.38 ns of routing on
     // the critical path once the read was registered).
     //
-    // ram_style = "distributed" is deliberate, not a fallback.  The ring is
-    // K_H rows: 5 x 96 = 480 bytes for conv1 and 5 x 112 = 560 bytes for the
-    // padded conv2 input, i.e. 60-70 entries per bank.  A RAMB18 holds 18 Kb,
-    // so block RAM would spend a whole block per bank on a memory that fits in
-    // a handful of LUTs, and add a deeper read path for nothing.  Block RAM is
-    // the right tool for the weight banks (8192 entries each); it is the wrong
-    // tool here, and the earlier ram_style = "block" hint on this array was
-    // never honoured anyway.
+    // ram_style = "distributed" is deliberate, not a fallback.  With the
+    // envelope defaults the ring is K_H_MAX x 64 groups = 320 entries per
+    // bank (2560 bytes in all), still small next to a RAMB18 per bank, and it
+    // keeps the read path shallow.  Block RAM is the right tool for the
+    // weight banks (8192 entries each); it is the wrong tool here.
     logic [DATA_WIDTH-1:0] bank_q [0:7];
     logic [2:0]            rd_bank_q;
 
@@ -122,40 +92,46 @@ module line_buffer #(
     logic [2:0]  beat_lane;
 
     // The write location advances with the stream.  Keeping the row, byte,
-    // ring slot, bank and address explicitly removes the former 32-bit
-    // divide/modulo cone from the write port.
+    // ring slot, bank and group explicitly keeps divide/modulo out of the
+    // write port.
     logic [ROW_W-1:0]       write_row;
-    logic [ROW_BYTE_W-1:0]  write_byte_in_row;
+    logic [BYTE_W-1:0]      write_byte_in_row;
     logic [RING_W-1:0]      write_ring_slot;
     logic [2:0]             write_bank;
+    logic [PITCH_W-1:0]     write_group;
     logic [MEM_ADDR_W-1:0]  write_addr;
 
-    // Read coordinates are not sequential, so the only retained modulo is
-    // the cheap narrow row-to-ring mapping.  Divide by eight is wiring.
+    // Derived geometry, re-registered every cycle.  The inputs are
+    // quasi-static, so the one-cycle lag is only visible right after a
+    // change, and the first byte of a frame is written at least one cycle
+    // after its beat was accepted.
+    logic [ROW_W-1:0]       last_row_q;
+    logic [BYTE_W-1:0]      last_row_byte_q;
+    logic [ROW_W-1:0]       in_h_q;
+    logic [BYTE_W-1:0]      row_bytes_q;
+
     logic                         rd_request_valid;
-    logic [BYTE_INDEX_W-1:0]      rd_byte_index;
-    logic [RING_W-1:0]            rd_ring_slot;
-    logic [2:0]                   rd_bank_calc;
-    logic [MEM_ADDR_W-1:0]        rd_group_calc;
     logic [MEM_ADDR_W-1:0]        rd_addr_calc;
 
     assign write_busy = beat_pending && !row_pause;
     // clear blocks the handshake for its own cycle, so a beat cannot be
     // accepted by the handshake and dropped by the clear on the same edge.
     assign s_ready = allow_input && !beat_pending && !frame_done && !clear;
+    assign write_addr = {write_ring_slot, write_group};
+
+    always_ff @(posedge clk) begin
+        last_row_q      <= cfg_in_h - 1'b1;
+        last_row_byte_q <= cfg_row_bytes - 1'b1;
+        in_h_q          <= cfg_in_h;
+        row_bytes_q     <= cfg_row_bytes;
+    end
 
     always_comb begin
         rd_request_valid = rd_en && (rd_row < rows_written) &&
-                           (rd_row < IN_H_VALUE) && (rd_col < IN_W) &&
-                           (rd_ch < C_LOGICAL);
-
-        // Physical byte offset from a logical coordinate.  C_PHYS_VALUE is a
-        // parameter, so this is a constant multiply, not a variable one.
-        rd_byte_index = (rd_col * C_PHYS_VALUE) + rd_ch;
-        rd_ring_slot  = rd_row % K_H_VALUE;
-        rd_bank_calc  = rd_byte_index[2:0];
-        rd_group_calc = rd_byte_index >> 3;
-        rd_addr_calc  = (rd_ring_slot * BYTE_GROUPS_VALUE) + rd_group_calc;
+                           (rd_row < in_h_q) && (rd_offset < row_bytes_q) &&
+                           (rd_slot <= LAST_RING_SLOT);
+        // Divide by eight is wiring; the slot is the high address field.
+        rd_addr_calc = {rd_slot, rd_offset[3 +: PITCH_W]};
     end
 
     always_ff @(posedge clk) begin
@@ -168,7 +144,7 @@ module line_buffer #(
             write_byte_in_row <= '0;
             write_ring_slot   <= '0;
             write_bank        <= '0;
-            write_addr        <= '0;
+            write_group       <= '0;
             rows_written      <= '0;
             frame_done        <= 1'b0;
             rd_valid          <= 1'b0;
@@ -183,10 +159,10 @@ module line_buffer #(
             //     reachable until the row that owns it has been fully
             //     rewritten.  rows_written only increments on the byte that
             //     completes a row, so a slot is never half-valid.
-            //   * rd_byte_index is bounded by ROW_BYTES-1 (rd_col < IN_W and
-            //     rd_ch < C_LOGICAL <= C_PHYS_STRIDE), so a read can never
-            //     address the slack bytes in the last byte group of a row --
-            //     the only bytes a rewrite leaves untouched.
+            //   * rd_offset is bounded by the row size (rd_offset <
+            //     cfg_row_bytes is part of the request check), so a read can
+            //     never address the slack bytes in the last byte group of a
+            //     row -- the only bytes a rewrite leaves untouched.
             //
             // Sweeping 8 x MEM_DEPTH bytes instead would need its own state
             // machine and a multi-cycle busy handshake.  A HALF-cleared ring
@@ -199,7 +175,7 @@ module line_buffer #(
             write_byte_in_row <= '0;
             write_ring_slot   <= '0;
             write_bank        <= '0;
-            write_addr        <= '0;
+            write_group       <= '0;
             rows_written      <= '0;
             frame_done        <= 1'b0;
             // beat_reg is left alone on purpose: it is a data register that is
@@ -211,7 +187,7 @@ module line_buffer #(
             // a_registered_read_valid contract the gather stage depends on
             // would be broken by the clear itself.
             rd_valid          <= rd_request_valid;
-            rd_bank_q         <= rd_bank_calc;
+            rd_bank_q         <= rd_offset[2:0];
         end else begin
             // Synchronous memory read.  The address is sampled on this edge in
             // the per-bank blocks below and the byte is selected after their
@@ -219,7 +195,7 @@ module line_buffer #(
             // different cycles.  Latency is unchanged: rd_byte is valid in the
             // cycle after the request, which is what the gather stage expects.
             rd_valid  <= rd_request_valid;
-            rd_bank_q <= rd_bank_calc;
+            rd_bank_q <= rd_offset[2:0];
 
             if (row_pause) begin
                 // A beat crossed a row boundary.  Hold its remaining lanes
@@ -237,22 +213,19 @@ module line_buffer #(
 
             if (beat_pending && !row_pause) begin
                 // The byte itself is written in the per-bank blocks below.
-                if (write_byte_in_row == LAST_ROW_BYTE) begin
+                if (write_byte_in_row == last_row_byte_q) begin
                     rows_written      <= rows_written + 1'b1;
                     write_byte_in_row <= '0;
                     write_bank        <= '0;
+                    // Every ring row starts on its own pitch boundary.
+                    write_group       <= '0;
 
-                    if (write_ring_slot == LAST_RING_SLOT) begin
+                    if (write_ring_slot == LAST_RING_SLOT)
                         write_ring_slot <= '0;
-                        write_addr      <= '0;
-                    end else begin
+                    else
                         write_ring_slot <= write_ring_slot + 1'b1;
-                        // The byte that ends a row is always in the last
-                        // group, so the next address is the next row base.
-                        write_addr <= write_addr + 1'b1;
-                    end
 
-                    if (write_row == LAST_ROW) begin
+                    if (write_row == last_row_q) begin
                         frame_done   <= 1'b1;
                         beat_pending <= 1'b0;
                     end else begin
@@ -267,8 +240,8 @@ module line_buffer #(
                 end else begin
                     write_byte_in_row <= write_byte_in_row + 1'b1;
                     if (write_bank == 3'd7) begin
-                        write_bank <= '0;
-                        write_addr <= write_addr + 1'b1;
+                        write_bank  <= '0;
+                        write_group <= write_group + 1'b1;
                     end else begin
                         write_bank <= write_bank + 1'b1;
                     end
@@ -301,7 +274,7 @@ module line_buffer #(
         @(posedge clk) disable iff (!rst_n)
         $past(clear) |-> ((write_row == '0) && (write_byte_in_row == '0) &&
                           (write_ring_slot == '0) && (write_bank == '0) &&
-                          (write_addr == '0) && (rows_written == '0) &&
+                          (write_group == '0) && (rows_written == '0) &&
                           !frame_done && !beat_pending && !row_pause &&
                           (beat_lane == '0));
     endproperty
@@ -324,12 +297,14 @@ module line_buffer #(
 
             // bank_q is the memory's output register and is deliberately not
             // reset: it is only consumed when rd_valid says a request landed.
+            // For the same reason it has no read enable -- gating it with
+            // rd_request_valid put the whole request check in front of 64
+            // clock enables and was the synthesis critical path.
             always_ff @(posedge clk) begin
                 if (write_fire && (write_bank == 3'(gb)))
                     bank_mem[write_addr] <=
                         beat_reg[beat_lane*DATA_WIDTH +: DATA_WIDTH];
-                if (rd_request_valid)
-                    bank_q[gb] <= bank_mem[rd_addr_calc];
+                bank_q[gb] <= bank_mem[rd_addr_calc];
             end
         end
     endgenerate

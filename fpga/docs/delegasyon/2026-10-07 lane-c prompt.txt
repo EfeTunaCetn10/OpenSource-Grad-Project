@@ -1,0 +1,97 @@
+You are agent B on a two-agent parallel RTL task. Your working directory is a PRIVATE git
+worktree: C:\grad-lc\systolic-array-8x8 (branch lane/layer_ctrl). Another agent is writing
+the sibling module in a different worktree at the same time, so stay strictly inside your own
+two files.
+
+FIRST read the binding seam contract: C:\codex-ctx\seam-contract.md
+It fixes the module name, the parameter list, every port name/width, the `error_flags` bit
+assignment and the semantics. It is not negotiable - the integration top is already written
+against it, and the module you talk to on the weight side is being written in parallel
+against the same contract. Read it fully before you write a line.
+
+YOUR DELIVERABLE - exactly two new files, nothing else:
+  C:\grad-lc\systolic-array-8x8\rtl\layer_ctrl.sv
+  C:\grad-lc\systolic-array-8x8\tb\tb_layer_ctrl.sv
+
+Module B in the contract is yours (`layer_ctrl`). In one sentence: it is the missing tile
+sequencer - it turns `window_gen`'s per-beat metadata stream into per-tile `start` commands
+for `compute_engine` and `weight_feeder`, carries the activation beats through, and makes the
+partial right-edge tile geometry correct.
+
+Before writing, read these existing files so your block actually fits:
+  rtl/compute_engine.sv   (the engine you command. Study the FSM: `start` is only sampled in
+                           IDLE/`start_ready`; CLEAR costs one cycle; `activation_ready` is
+                           asserted ONLY when state==FEED and BOTH source edges are valid;
+                           DRAIN emits `active_cols` beats and then a one-cycle `done`.)
+  rtl/window_gen.sv       (the producer. Note what `m_tile_start`, `m_tile_last`,
+                           `m_active_cols`, `m_k` and `done` mean per beat, and that the
+                           metadata of a beat is only valid while that beat is presented.)
+  tb/tb_window_gen.sv     (CRITICAL PRIOR ART: its ad-hoc `integration_started` logic is
+                           exactly the first-beat-loss problem you must solve properly - it
+                           holds the generator's ready low until the engine reaches FEED so
+                           the first activation beat is not lost. Read it and understand why
+                           it is needed before designing your gate.)
+  rtl/requant_array.sv    (house style for assertions and for a control block written for
+                           this project)
+  tb/tb_requant_array.sv  (house testbench pattern: phases, explicit LFSR instead of seeded
+                           $urandom - XSim does not support a seeded $urandom - and the final
+                           PASS line format)
+  sim/run_tests.py        (the runner; read how it decides PASS/FAIL - absence of failure is
+                           NOT success, it greps for a PASS token and fails on any error
+                           marker)
+
+Context for the geometry, so the numbers in your testbench are real: Stage 1 is conv1 of
+LeNet-5 on a 32x32x3 input - kernel 5x5, stride 1, pad 0, 6 output channels, so
+K = 3*5*5 = 75, one channel tile (`cfg_active_rows = 6`, `cfg_tile_idx = 0`), output 28x28.
+`window_gen` is row-bounded: each of the 28 output rows is covered by 4 column tiles with
+`active_cols` = 8, 8, 8, 4. Driving `active_cols` wrong does not crash anything - it silently
+corrupts the last pixels of every output row, in a correctly shaped tensor with no error
+flag. That failure class is the reason this module exists.
+
+ENGINEERING POINTS THAT WILL DECIDE WHETHER THIS IS ANY GOOD:
+- The first-beat problem: you must sample the new tile's `m_active_cols` from a beat you have
+  NOT yet accepted (`w_ready` low), issue `eng_start` with it, wait out CLEAR, and only then
+  open the activation gate. Getting this one cycle wrong either loses the k=0 beat or feeds a
+  beat into the wrong tile.
+- Never accept a window beat while the engine is outside FEED, and never let two tiles be in
+  flight at once.
+- `weight_feeder` must be started for the same tile early enough that its k=0 word is
+  presented by the time the engine reaches FEED (its handshake is coupled to yours - neither
+  edge advances alone - so a late feeder costs cycles but must never cost correctness).
+- Every `error_flags` bit must be genuinely reachable and sticky, and must not deadlock the
+  block. A flag that can never fire is worse than no flag, because it reads as coverage.
+- Keep it synthesizable at 100 MHz on xc7z020: small FSM, registered outputs where it matters,
+  no long combinational chains through the metadata. You are NOT asked to run synthesis (the
+  integration top does not exist yet), but note in your report anything you think deserves a
+  later STA look.
+- Do NOT invent a window_gen rewind/replay port for conv2's second channel tile - that port
+  does not exist. Mark the Stage 2 hook point with a comment and keep Stage 1 single-tile.
+
+VERIFICATION - do not skip and do not downgrade:
+  python sim/run_tests.py
+must pass for the FULL set (the 7 tests already in the repo plus your new one = 8). Vivado is
+installed; if `xvlog` is not on PATH, set VIVADO_BIN - try these in order:
+  C:\Vivado\2025.1\Vivado\bin   then   C:\Xilinx\Vivado\2025.1\bin
+Run the regression yourself and paste the real result. Do not claim a pass you did not see.
+If the toolchain genuinely cannot run, say so explicitly in your report rather than guessing -
+an unverified control block is worse than a reported blocker.
+
+Testbench approach: drive `layer_ctrl` with a behavioural window-generator model and a
+behavioural engine/feeder model (or instantiate the REAL `compute_engine`, which is stronger
+evidence and allowed - it is read-only to you - plus a simple behavioural weight source
+standing in for the parallel agent's `weight_feeder`, which does not exist in your worktree).
+Either way, required phases: consecutive tiles with DIFFERENT `active_cols` (8 then 4), a
+generator that stalls (`w_valid` gaps), a consumer that backpressures the engine's output so
+DRAIN stretches, a full-rate phase, and every `error_flags` bit deliberately provoked. Check
+that the beats delivered per tile equal `cfg_k_len` and that the tile's `active_cols` reaches
+the engine - count and compare, do not eyeball a waveform.
+
+Then mutation-test your own module: at least 4 single-line mutations (gate opened one cycle
+early, `active_cols` sampled from the wrong beat, `eng_start` issued without checking
+`eng_start_ready`, tile counter off by one, a sticky error flag made non-sticky). Confirm the
+testbench FAILS for each, revert, and report caught vs survived. Report a surviving mutant as
+a finding, do not hide it.
+
+Report at the end: your gate/handshake scheme and why it cannot lose or misroute a beat, the
+exact regression line, the mutation table, your assumptions, and anything wrong you noticed
+in the EXISTING code (report only - do not fix it, it is outside your two files).

@@ -7,7 +7,7 @@ foreach f {
     pe_os.sv systolic_array_os.sv compute_engine.sv
     window_gen.sv line_buffer.sv requant_unit.sv requant_array.sv
     weight_feeder.sv layer_ctrl.sv conv1_top.sv
-    axi_lite_regs.sv accel_top.sv
+    pool2x2.sv act_buffer.sv axi_lite_regs.sv accel_top.sv
 } {
     read_verilog -sv [file join $design_dir rtl $f]
 }

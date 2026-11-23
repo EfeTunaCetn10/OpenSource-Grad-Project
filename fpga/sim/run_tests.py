@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """XSim regression runner (ADR-009 Katman 1 + Katman 2).
 
-Compiles every source under rtl/ and tb/, then elaborates and runs every
-module whose name starts with `tb_`. A test passes when XSim exits 0, its
+Compiles every source under rtl/ and tb/. By default it runs tests compatible
+with the runtime RTL interface. Historical static-interface POC tests remain
+available via --legacy (or together with current tests via --all). A test passes when XSim exits 0, its
 output contains a PASS line, and it contains no error/failure marker.
 
 Why XSim and not cocotb+Icarus: ADR-009 chose cocotb+Icarus because Vivado
@@ -35,6 +36,15 @@ PROJECT = Path(__file__).resolve().parent.parent
 RTL_DIR = PROJECT / "rtl"
 TB_DIR = PROJECT / "tb"
 BUILD = PROJECT / "sim" / "build"
+
+# These Person A POC tops instantiate the pre-runtime RTL parameter/port API.
+# Keep their sources and expose them explicitly; they are not current RTL tests.
+LEGACY_TOPS = {
+    "tb_v3_pool_poc", "tb_maxpool2d_directed",
+    "tb_v3_conv1_poc", "tb_v3_conv2_poc", "tb_v3_conv2_reader",
+    "tb_v3_conv3_poc", "tb_v3_fc1_poc", "tb_v3_fc2_poc",
+    "tb_v3_conv3_reader", "tb_v3_padding",
+}
 
 # A test is only green if it says so. Absence of failure is not success:
 # an XSim run that ends early still exits 0.
@@ -115,6 +125,15 @@ VECTOR_GENERATORS = [
     ("gen_requant_vectors.py", "req_y.mem"),
     ("gen_conv1_vectors.py", "c1_y.mem"),
     ("gen_act_buffer_vectors.py", "actbuf_frame0.mem"),
+    ("gen_pool_vectors.py", "p1_y.mem"),
+    ("gen_fc_vectors.py", "fc1_y.mem"),
+    ("gen_v3_e2e_vectors.py", "v3e_img0_pred.mem"),
+    ("gen_sys_vectors.py", "sys_ovf_done.mem"),
+    ("gen_netprog_vectors.py", "np_v3_meta.json"),
+    ("gen_prog_diag_vectors.py", "diag_axis_lane_meta.mem"),
+    # Must stay LAST: lenet_ref imports pool_ref and fc_ref, so this entry
+    # composes the other lanes' references instead of standing alone.
+    ("gen_lenet_vectors.py", "lenet_pred.mem"),
 ]
 
 
@@ -170,6 +189,9 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("tests", nargs="*", help="test tops to run (default: all)")
     ap.add_argument("--list", action="store_true", help="list tests and exit")
+    group = ap.add_mutually_exclusive_group()
+    group.add_argument("--legacy", action="store_true", help="run historical static-interface POC tests")
+    group.add_argument("--all", action="store_true", help="run current and historical tests")
     ap.add_argument("--keep", action="store_true", help="keep build dir")
     ap.add_argument("--verbose", "-v", action="store_true", help="always show output")
     args = ap.parse_args()
@@ -179,10 +201,14 @@ def main() -> int:
     all_tests = discover_tests()
     if args.list:
         for t in all_tests:
-            print(t)
+            print(f"{t}  {'legacy' if t in LEGACY_TOPS else 'current'}")
         return 0
 
-    selected = args.tests or all_tests
+    current = [t for t in all_tests if t not in LEGACY_TOPS]
+    legacy = [t for t in all_tests if t in LEGACY_TOPS]
+    selected = args.tests or (legacy if args.legacy else all_tests if args.all else current)
+    if not args.tests and not args.legacy and not args.all:
+        print(f"[suite] current: {len(current)} tests; historical legacy: {len(legacy)} excluded (use --legacy or --all)")
     unknown = [t for t in selected if t not in all_tests]
     if unknown:
         print(f"Unknown test(s): {', '.join(unknown)}")

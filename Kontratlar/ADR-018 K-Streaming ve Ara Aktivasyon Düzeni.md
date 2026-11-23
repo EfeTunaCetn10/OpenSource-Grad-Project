@@ -1,7 +1,7 @@
 ---
 title: ADR-018 K-Streaming ve Ara Aktivasyon Düzeni
 created: 2026-09-26
-modified: 2026-10-07
+modified: 2026-11-06
 type: decision
 status: önerildi
 tags: [dnn-accelerator, adr, kontrat, rtl, dataflow, bram, memory-layout]
@@ -418,3 +418,29 @@ için address generator henüz yazılmadı; requant stream'i doğrudan dışarı
 - Yeni test kimlikleri: `T_ENG_KSTREAM_001` (K=75/150/400 için golden karşılaştırma),
   `T_ENG_SKEW_001` (skew shift register'ının doğru hizalaması),
   `T_MEM_PINGPONG_001` (katman sınırında tampon takası, okuma/yazma çakışması yok).
+
+## Ek madde — 2026-11-06: tile-major depolama, HWC okuma
+
+**Sorun (2026-11-05 sağlık testi K1):** Karar 2'nin depolama düzeni tile-major
+`[c_tile][H][W][8]`, ama `window_gen` girdiyi piksel başına bitişik kanallarla (HWC, `c_phys`
+adımı) okuyor. Tek tile'da ikisi aynı; C_in > 8 olan her katmanda (v3 conv2–conv5) yanlış
+byte sırası. Probe: tile-major girdiyle 0/4, HWC ile PASS.
+
+**Karar (Emin, 2026-11-06):** depolama tile-major kalır, `window_gen` değişmez; `act_buffer`'a
+HWC sırasında bir okuma akışı eklenir. Bir piksel için T tile'ın word'leri arka arkaya:
+`for h, for w, for t: mem[t·H·W + h·W + w]`, word'ün lane r'si kanal 8t+r. Adres artımlı
+(piksel işaretçisi + `plane` biriken tile ofseti), çarpma yok, rd_ready=1'de bubble yok.
+
+**Bununla gelen kararlar:**
+- Ping-pong takası tile pass'i başına değil **katman başına**, yalnız `LAYER_SWAP` komutuyla.
+  Okuma tarafı yazılan geometriyi (h, w, tiles) takas anında devralır; okuyucuya ayrı cfg gerekmez.
+- Bir tile pass'inin çıktısı o tile'ın raster düzlemidir; pool `cfg_c_tiles = 1` ile akış
+  halinde araya girer.
+- **FC flatten sırası (h, w, c).** pool4 çıktısı (3×3, 4 tile) FC1'e 1×1×288 tek piksel olarak
+  akar; giriş indeksi `k = (h·3 + w)·32 + c`. FC1 ağırlıkları
+  `reshape(64,32,3,3).permute(0,2,3,1).reshape(64,288)` ile export edilir
+  (2026-10-08 FC1 export transform bildirimindeki tile-major sıra v3 için geçersiz).
+- `C_TILE_MAX` 16 (FC1 çıktısı 8 tile, LeNet fc1 15 tile); `DEPTH` 4608 taşma sınırı.
+- Kanıt: `faz4-datapath` @ `7fbf3f8`, sistem smoke S1 — conv1 (2 tile, pool) → swap → conv2
+  (3 tile, act_buffer'dan HWC) → swap → conv3 (4 tile) → m_*, yalnız AXI-Lite ile, saf Python
+  zincirine karşı 1152 + 432 + 576 word bit-exact. `T_MEM_PINGPONG_001` hâlâ kalıcı test değil.

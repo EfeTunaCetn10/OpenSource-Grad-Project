@@ -1,5 +1,24 @@
 # PYNQ-Z2 CNN Accelerator
 
+## Stage 2 source baseline — 23 November 2026
+
+This branch combines the frozen `v3_48_deep_pool_refine` ML pipeline (seed123,
+epoch57, 3×48×48 input, five Conv and two FC layers) with the November 15
+runtime RTL integration. The model and PTQ configuration remain frozen.
+The RTL includes runtime geometry, activation buffering, register map v5,
+AXI4-Lite weight loading, an AXI4-Stream shell, a program packer, PYNQ driver,
+and PS7 + DMA block design. See [FPGA status](fpga/README.md).
+
+The existing v3 RTL fixtures are synthetic. Frozen PTQ parameters have not yet
+been adapted to `netprog.py`, and real-model RTL or board inference has not been
+verified. Full-network execution uses host/testbench sequencing of individual
+layer passes.
+
+The sections below document the earlier seed42 LeNet candidate and are retained
+as historical evidence. They do not describe the frozen Stage 2 model.
+
+## Historical seed42 LeNet candidate — 2 October 2026
+
 A PYNQ-Z2 FPGA accelerator project using a LeNet-style CNN for 32×32 RGB insect
 classification across 10 labels. **The candidate INT8 Python pipeline is complete
 through full validation and canonical test-vector export. No RTL implementation
@@ -7,7 +26,7 @@ is available; cocotb/RTL bit-exact verification has not started.**
 
 ## Current validated status
 
-This is the authoritative project status summary (2026-10-02). Component reports
+This section records the validated candidate status as of 2026-10-02. Component reports
 retain implementation details and explicitly labelled historical results.
 
 **Selected FP32 checkpoint → deterministic train-only calibration → candidate INT8
@@ -78,11 +97,16 @@ The most recent recorded regression is **555 passed**, after test-vector export
 (focused export/forward tests: **27 passed**). These are prior execution results;
 this documentation update did not rerun tests or validation.
 
-**Next dependency:** Person B must provide RTL and its usable interface definition.
-Then interface adapters and cocotb tests can consume the canonical vectors, compare
-primitive and intermediate results, and investigate mismatches. RTL equivalence,
-hardware packing/export, AXI/DMA integration, FPGA execution and hardware
-performance measurements remain future work; none is established by Python tests.
+At that date, Person B RTL and interface definitions were still pending. These
+candidate vectors do not establish frozen-model RTL or hardware equivalence.
+
+## RTL / FPGA (Person B) — 15 November 2026
+
+The current implementation is described in [fpga/README.md](fpga/README.md).
+Person B reports 25/25 XSim regression PASS, PS7 VIP + DMA synthetic-v3 network
+simulation PASS, and post-route 100 MHz timing closure (WNS +0.555 ns). These
+reported results have not been rerun by this source integration. A board run and
+frozen-model RTL accuracy remain unverified.
 
 ## Guides and repository
 
